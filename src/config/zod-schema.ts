@@ -354,6 +354,7 @@ export const OpenClawSchema = z
     browser: z
       .object({
         enabled: z.boolean().optional(),
+        sharedRoutedExecutionEnabled: z.boolean().optional(),
         evaluateEnabled: z.boolean().optional(),
         cdpUrl: z.string().optional(),
         remoteCdpTimeoutMs: z.number().int().nonnegative().optional(),
@@ -431,6 +432,7 @@ export const OpenClawSchema = z
                 provider: z.string(),
                 mode: z.union([z.literal("api_key"), z.literal("oauth"), z.literal("token")]),
                 email: z.string().optional(),
+                displayName: z.string().optional(),
               })
               .strict(),
           )

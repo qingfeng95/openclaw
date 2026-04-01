@@ -8,33 +8,87 @@ import {
   resolveSubagentToolPolicy,
 } from "../agents/pi-tools.policy.js";
 import {
-  applyToolPolicyPipeline,
-  buildDefaultToolPolicyPipelineSteps,
-} from "../agents/tool-policy-pipeline.js";
-import {
   collectExplicitAllowlist,
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
+import {
+  applyToolPolicyPipeline,
+  buildDefaultToolPolicyPipelineSteps,
+} from "../agents/tool-policy-pipeline.js";
 import { ToolInputError } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { logWarn } from "../logger.js";
+import { resolveMemoryStorePathForScope } from "../multitenant/integration/memory-hook.js";
+import { resolveToolExecutionPolicy } from "../multitenant/integration/openclaw-tools-hook.js";
+import { resolveStoreKeyForScope } from "../multitenant/integration/sessions-hook.js";
+import {
+  resolveSafeUserPathForScope,
+  resolveWorkspaceRootForScope,
+} from "../multitenant/integration/workspace-hook.js";
+import { runWithOptionalRuntimeScope } from "../multitenant/scope/request-context.js";
+import type { RuntimeScope } from "../multitenant/scope/runtime-scope.js";
+import { routeToolExecution } from "../multitenant/tools/tool-routing.js";
+import {
+  buildSharedToolUsageEvent,
+  reportSharedToolUsageEvent,
+} from "../multitenant/usage/usage-reporter.js";
+import {
+  readScopedTextFile,
+  scopedPathExists,
+  writeScopedTextFile,
+} from "../multitenant/workspace/scoped-fs.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
+import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
 import {
   readJsonBodyOrError,
-  sendGatewayAuthFailure,
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
 } from "./http-common.js";
-import { getBearerToken, getHeader } from "./http-utils.js";
+import { getHeader } from "./http-utils.js";
+
+function resolveToolActionFromRequest(
+  action: string | undefined,
+  args: Record<string, unknown>,
+): string | undefined {
+  if (action) {
+    return action;
+  }
+  const inlineAction = args.action;
+  return typeof inlineAction === "string" && inlineAction.trim() ? inlineAction.trim() : undefined;
+}
+
+function sendToolPolicyError(
+  res: ServerResponse,
+  status: number,
+  errorType: string,
+  message: string,
+  policy: {
+    route: "local" | "worker" | "deny";
+    allow: boolean;
+    reason: string;
+    ruleId: string;
+    resourceClass: string;
+    supportLevel: "stable" | "experimental" | "unsupported";
+  },
+) {
+  sendJson(res, status, {
+    ok: false,
+    error: {
+      type: errorType,
+      message,
+      policy,
+    },
+  });
+}
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -45,6 +99,9 @@ type ToolsInvokeBody = {
   args?: unknown;
   sessionKey?: unknown;
   dryRun?: unknown;
+  runtimeScope?: unknown;
+  debugRuntimeScope?: unknown;
+  debugScopedFs?: unknown;
 };
 
 function resolveSessionKeyFromBody(body: ToolsInvokeBody): string | undefined {
@@ -52,6 +109,43 @@ function resolveSessionKeyFromBody(body: ToolsInvokeBody): string | undefined {
     return body.sessionKey.trim();
   }
   return undefined;
+}
+
+function tryParseRuntimeScope(value: unknown): RuntimeScope | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const candidate = value as Partial<RuntimeScope>;
+  if (
+    (candidate.mode !== "shared" && candidate.mode !== "dedicated") ||
+    typeof candidate.tenantId !== "string" ||
+    typeof candidate.userId !== "string" ||
+    typeof candidate.logicalInstanceId !== "string" ||
+    typeof candidate.sessionId !== "string" ||
+    typeof candidate.requestId !== "string"
+  ) {
+    return undefined;
+  }
+  return candidate as RuntimeScope;
+}
+
+function resolveRuntimeScopeFromRequest(
+  req: IncomingMessage,
+  body: ToolsInvokeBody,
+): RuntimeScope | undefined {
+  const bodyScope = tryParseRuntimeScope(body.runtimeScope);
+  if (bodyScope) {
+    return bodyScope;
+  }
+  const headerValue = getHeader(req, "x-openclaw-runtime-scope");
+  if (!headerValue) {
+    return undefined;
+  }
+  try {
+    return tryParseRuntimeScope(JSON.parse(headerValue));
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveMemoryToolDisableReasons(cfg: ReturnType<typeof loadConfig>): string[] {
@@ -90,13 +184,12 @@ function mergeActionIntoArgsIfSupported(params: {
   if (args.action !== undefined) {
     return args;
   }
-  // TypeBox schemas are plain objects; many tools define an `action` property.
   const schemaObj = toolSchema as { properties?: Record<string, unknown> } | null;
   const hasAction = Boolean(
     schemaObj &&
-    typeof schemaObj === "object" &&
-    schemaObj.properties &&
-    "action" in schemaObj.properties,
+      typeof schemaObj === "object" &&
+      schemaObj.properties &&
+      "action" in schemaObj.properties,
   );
   if (!hasAction) {
     return args;
@@ -133,6 +226,37 @@ function resolveToolInputErrorStatus(err: unknown): number | null {
   return name === "ToolAuthorizationError" ? 403 : 400;
 }
 
+function reportToolUsageEvent(params: {
+  runtimeScope?: RuntimeScope;
+  toolName: string;
+  action?: string;
+  outcome:
+    | "tool_policy_denied"
+    | "tool_routed_executed"
+    | "tool_route_unavailable"
+    | "tool_dedicated_required"
+    | "tool_local_executed";
+  routeType: "local" | "worker" | "deny";
+  startedAtMs: number;
+  ruleId?: string;
+  reason?: string;
+  workerKind?: "browser" | "nodes" | "generic";
+}) {
+  reportSharedToolUsageEvent(
+    buildSharedToolUsageEvent({
+      runtimeScope: params.runtimeScope,
+      toolName: params.toolName,
+      action: params.action,
+      outcome: params.outcome,
+      routeType: params.routeType,
+      ruleId: params.ruleId,
+      reason: params.reason,
+      latencyMs: Math.max(0, Date.now() - params.startedAtMs),
+      workerKind: params.workerKind,
+    }),
+  );
+}
+
 export async function handleToolsInvokeHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -155,17 +279,15 @@ export async function handleToolsInvokeHttpRequest(
   }
 
   const cfg = loadConfig();
-  const token = getBearerToken(req);
-  const authResult = await authorizeHttpGatewayConnect({
-    auth: opts.auth,
-    connectAuth: token ? { token, password: token } : null,
+  const ok = await authorizeGatewayBearerRequestOrReply({
     req,
+    res,
+    auth: opts.auth,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
-  if (!authResult.ok) {
-    sendGatewayAuthFailure(res, authResult);
+  if (!ok) {
     return true;
   }
 
@@ -174,6 +296,9 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
   const body = (bodyUnknown ?? {}) as ToolsInvokeBody;
+  const runtimeScope = resolveRuntimeScopeFromRequest(req, body);
+  const debugRuntimeScope = body.debugRuntimeScope === true;
+  const debugScopedFs = body.debugScopedFs === true;
 
   const toolName = typeof body.tool === "string" ? body.tool.trim() : "";
   if (!toolName) {
@@ -199,7 +324,6 @@ export async function handleToolsInvokeHttpRequest(
   }
 
   const action = typeof body.action === "string" ? body.action.trim() : undefined;
-
   const argsRaw = body.args;
   const args =
     argsRaw && typeof argsRaw === "object" && !Array.isArray(argsRaw)
@@ -210,7 +334,80 @@ export async function handleToolsInvokeHttpRequest(
   const sessionKey =
     !rawSessionKey || rawSessionKey === "main" ? resolveMainSessionKey(cfg) : rawSessionKey;
 
-  // Resolve message channel/account hints (optional headers) for policy inheritance.
+  if (debugRuntimeScope || debugScopedFs) {
+    const safeResolve = <T>(label: string, fn: () => T) => {
+      try {
+        return { ok: true as const, value: fn() };
+      } catch (error) {
+        return {
+          ok: false as const,
+          error: error instanceof Error ? error.message : String(error),
+          label,
+        };
+      }
+    };
+
+    const safeResolveAsync = async <T>(label: string, fn: () => Promise<T>) => {
+      try {
+        return { ok: true as const, value: await fn() };
+      } catch (error) {
+        return {
+          ok: false as const,
+          error: error instanceof Error ? error.message : String(error),
+          label,
+        };
+      }
+    };
+
+    const scopedWorkspaceWriteRead = runtimeScope
+      ? await safeResolveAsync("scopedWorkspaceWriteRead", async () => {
+          const content = `hello-from-${runtimeScope.logicalInstanceId}`;
+          const writtenPath = await writeScopedTextFile(
+            runtimeScope,
+            "debug/hello.txt",
+            content,
+            "workspace",
+          );
+          const readBack = await readScopedTextFile(runtimeScope, "debug/hello.txt", "workspace");
+          return {
+            writtenPath,
+            readBack,
+            matches: readBack === content,
+          };
+        })
+      : { ok: false as const, label: "scopedWorkspaceWriteRead", error: "runtimeScope missing" };
+
+    sendJson(res, 200, {
+      ok: true,
+      debug: {
+        runtimeScopePresent: Boolean(runtimeScope),
+        runtimeScope: runtimeScope ?? null,
+        resolvedWorkspaceRoot: safeResolve("resolvedWorkspaceRoot", () =>
+          resolveWorkspaceRootForScope(runtimeScope),
+        ),
+        resolvedMemoryStorePath: safeResolve("resolvedMemoryStorePath", () =>
+          resolveMemoryStorePathForScope(runtimeScope),
+        ),
+        scopedSessionStoreKey: safeResolve("scopedSessionStoreKey", () =>
+          resolveStoreKeyForScope(runtimeScope, sessionKey),
+        ),
+        scopedSafeWorkspacePath: safeResolve("scopedSafeWorkspacePath", () =>
+          resolveSafeUserPathForScope(runtimeScope, "debug/hello.txt", "workspace"),
+        ),
+        scopedSafeDataPath: safeResolve("scopedSafeDataPath", () =>
+          resolveSafeUserPathForScope(runtimeScope, "debug/hello.txt", "data"),
+        ),
+        scopedWorkspaceFileExists: runtimeScope
+          ? await safeResolveAsync("scopedWorkspaceFileExists", () =>
+              scopedPathExists(runtimeScope, "debug/hello.txt", "workspace"),
+            )
+          : { ok: false as const, label: "scopedWorkspaceFileExists", error: "runtimeScope missing" },
+        scopedWorkspaceWriteRead,
+      },
+    });
+    return true;
+  }
+
   const messageChannel = normalizeMessageChannel(
     getHeader(req, "x-openclaw-message-channel") ?? "",
   );
@@ -247,28 +444,29 @@ export async function handleToolsInvokeHttpRequest(
     ? resolveSubagentToolPolicy(cfg)
     : undefined;
 
-  // Build tool list (core + plugin tools).
-  const allTools = createOpenClawTools({
-    agentSessionKey: sessionKey,
-    agentChannel: messageChannel ?? undefined,
-    agentAccountId: accountId,
-    agentTo,
-    agentThreadId,
-    allowGatewaySubagentBinding: true,
-    // HTTP callers consume tool output directly; preserve raw media invoke payloads.
-    allowMediaInvokeCommands: true,
-    config: cfg,
-    pluginToolAllowlist: collectExplicitAllowlist([
-      profilePolicy,
-      providerProfilePolicy,
-      globalPolicy,
-      globalProviderPolicy,
-      agentPolicy,
-      agentProviderPolicy,
-      groupPolicy,
-      subagentPolicy,
-    ]),
-  });
+  const allTools = runWithOptionalRuntimeScope(runtimeScope, () =>
+    createOpenClawTools({
+      agentSessionKey: sessionKey,
+      agentChannel: messageChannel ?? undefined,
+      agentAccountId: accountId,
+      agentTo,
+      agentThreadId,
+      allowGatewaySubagentBinding: true,
+      allowMediaInvokeCommands: true,
+      runtimeScope,
+      config: cfg,
+      pluginToolAllowlist: collectExplicitAllowlist([
+        profilePolicy,
+        providerProfilePolicy,
+        globalPolicy,
+        globalProviderPolicy,
+        agentPolicy,
+        agentProviderPolicy,
+        groupPolicy,
+        subagentPolicy,
+      ]),
+    }),
+  );
 
   const subagentFiltered = applyToolPolicyPipeline({
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -293,7 +491,6 @@ export async function handleToolsInvokeHttpRequest(
     ],
   });
 
-  // Gateway HTTP-specific deny list — applies to ALL sessions via HTTP.
   const gatewayToolsCfg = cfg.gateway?.tools;
   const defaultGatewayDeny: string[] = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
     (name) => !gatewayToolsCfg?.allow?.includes(name),
@@ -314,23 +511,27 @@ export async function handleToolsInvokeHttpRequest(
   }
 
   try {
+    const startedAtMs = Date.now();
     const toolCallId = `http-${Date.now()}`;
+    const resolvedAction = resolveToolActionFromRequest(action, args);
     const toolArgs = mergeActionIntoArgsIfSupported({
       // oxlint-disable-next-line typescript/no-explicit-any
       toolSchema: (tool as any).parameters,
-      action,
+      action: resolvedAction,
       args,
     });
-    const hookResult = await runBeforeToolCallHook({
-      toolName,
-      params: toolArgs,
-      toolCallId,
-      ctx: {
-        agentId,
-        sessionKey,
-        loopDetection: resolveToolLoopDetectionConfig({ cfg, agentId }),
-      },
-    });
+    const hookResult = await runWithOptionalRuntimeScope(runtimeScope, () =>
+      runBeforeToolCallHook({
+        toolName,
+        params: toolArgs,
+        toolCallId,
+        ctx: {
+          agentId,
+          sessionKey,
+          loopDetection: resolveToolLoopDetectionConfig({ cfg, agentId }),
+        },
+      }),
+    );
     if (hookResult.blocked) {
       sendJson(res, 403, {
         ok: false,
@@ -338,8 +539,89 @@ export async function handleToolsInvokeHttpRequest(
       });
       return true;
     }
+
+    const policyDecision = await resolveToolExecutionPolicy({
+      runtimeScope,
+      toolName,
+      args: hookResult.params,
+    });
+
+    if (policyDecision.route === "deny") {
+      reportToolUsageEvent({
+        runtimeScope,
+        toolName,
+        action: resolvedAction,
+        outcome: "tool_policy_denied",
+        routeType: "deny",
+        startedAtMs,
+        ruleId: policyDecision.ruleId,
+        reason: policyDecision.reason,
+      });
+      sendToolPolicyError(
+        res,
+        403,
+        "tool_policy_denied",
+        policyDecision.reason,
+        policyDecision,
+      );
+      return true;
+    }
+
+    if (policyDecision.route === "worker") {
+      const routingResult = await routeToolExecution({
+        runtimeScope,
+        toolName,
+        toolArgs: hookResult.params,
+        toolCallId,
+        policyDecision,
+        // oxlint-disable-next-line typescript/no-explicit-any
+        tool: tool as any,
+      });
+
+      if (routingResult.executed) {
+        reportToolUsageEvent({
+          runtimeScope,
+          toolName,
+          action: resolvedAction,
+          outcome: "tool_routed_executed",
+          routeType: "worker",
+          startedAtMs,
+          ruleId: policyDecision.ruleId,
+          workerKind: routingResult.workerKind,
+        });
+        sendJson(res, 200, { ok: true, result: routingResult.result });
+        return true;
+      }
+
+      reportToolUsageEvent({
+        runtimeScope,
+        toolName,
+        action: resolvedAction,
+        outcome: routingResult.errorType,
+        routeType: "worker",
+        startedAtMs,
+        ruleId: routingResult.ruleId ?? policyDecision.ruleId,
+        reason: routingResult.reason,
+        workerKind: routingResult.workerKind,
+      });
+      const status = routingResult.mode === "dedicated-required" ? 409 : 501;
+      sendToolPolicyError(res, status, routingResult.errorType, routingResult.reason, policyDecision);
+      return true;
+    }
+
     // oxlint-disable-next-line typescript/no-explicit-any
-    const result = await (tool as any).execute?.(toolCallId, hookResult.params);
+    const result = await runWithOptionalRuntimeScope(runtimeScope, () =>
+      (tool as any).execute?.(toolCallId, hookResult.params),
+    );
+    reportToolUsageEvent({
+      runtimeScope,
+      toolName,
+      action: resolvedAction,
+      outcome: "tool_local_executed",
+      routeType: "local",
+      startedAtMs,
+      ruleId: policyDecision.ruleId,
+    });
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);

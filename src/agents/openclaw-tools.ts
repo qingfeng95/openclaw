@@ -1,3 +1,6 @@
+import { createMultitenantToolContext } from "../multitenant/integration/openclaw-tools-hook.js";
+import type { RuntimeScope } from "../multitenant/scope/runtime-scope.js";
+import type { ToolPolicyResolver } from "../multitenant/tools/tool-policy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { resolvePluginTools } from "../plugins/tools.js";
@@ -72,6 +75,10 @@ export function createOpenClawTools(
     modelHasVision?: boolean;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
     allowMediaInvokeCommands?: boolean;
+    /** Optional multitenant runtime scope for shared/dedicated logical instances. */
+    runtimeScope?: RuntimeScope;
+    /** Optional multitenant tool policy resolver hook. */
+    toolPolicyResolver?: ToolPolicyResolver;
     /** Explicit agent ID override for cron/hook sessions. */
     requesterAgentIdOverride?: string;
     /** Require explicit message targets (no implicit last-route sends). */

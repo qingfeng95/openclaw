@@ -1,3 +1,5 @@
+import { resolveWorkspaceRootForScope } from "../multitenant/integration/workspace-hook.js";
+import { getCurrentRuntimeScope } from "../multitenant/scope/request-context.js";
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 
@@ -16,5 +18,10 @@ export function normalizeWorkspaceDir(workspaceDir?: string): string | null {
 }
 
 export function resolveWorkspaceRoot(workspaceDir?: string): string {
+  const scope = getCurrentRuntimeScope();
+  const scopedRoot = resolveWorkspaceRootForScope(scope ?? undefined);
+  if (scopedRoot) {
+    return scopedRoot;
+  }
   return normalizeWorkspaceDir(workspaceDir) ?? process.cwd();
 }

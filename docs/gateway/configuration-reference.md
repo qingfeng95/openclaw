@@ -14,6 +14,79 @@ Config format is **JSON5** (comments + trailing commas allowed). All fields are 
 
 ---
 
+## Shared tool local-source whitelist
+
+Use `tools.shared.localSourceValidation.allowedPathPrefixes` to control which **relative local path prefixes** Shared mode accepts for lightweight local sources on the shared `message`, `image`, and `pdf` tools.
+
+### What it controls
+
+This setting only affects the Shared-mode local-source whitelist check for:
+
+- `message` attachment/file paths (`path`, `filePath`)
+- `image` local image refs (`image`, `images[]`)
+- `pdf` local PDF refs (`pdf`, `pdfs[]`)
+
+It does **not** make Shared mode generally permissive. It only decides which relative path prefixes are eligible local sources before the existing lightweight policy checks run.
+
+### Defaults
+
+If unset, Shared mode accepts these prefixes:
+
+```json5
+{
+  tools: {
+    shared: {
+      localSourceValidation: {
+        allowedPathPrefixes: ["./", ".\\", "tmp/", "tmp\\", "./tmp/", ".\\tmp\\"],
+      },
+    },
+  },
+}
+```
+
+### Safety checks that still apply
+
+Even with an override, Shared mode still rejects:
+
+- absolute paths
+- Windows drive paths such as `C:/...`
+- `../` traversal or any path that escapes the relative boundary
+- `http(s)://`, `file://`, and message `data:` local-source shortcuts
+- message actions outside the lightweight media allowlist
+- message file types outside the small allowed set (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.pdf`, `.txt`, `.md`, `.json`)
+- oversized message buffers (> 2 MB)
+- image requests above Shared limits (`maxBytesMb > 10`, `maxImages > 5`)
+- PDF requests above Shared limits (`maxBytesMb > 10`)
+
+### Override example
+
+To move Shared-approved local sources under `media/shared/` instead of the default `tmp` area:
+
+```json5
+{
+  tools: {
+    shared: {
+      localSourceValidation: {
+        allowedPathPrefixes: ["media/shared/"],
+      },
+    },
+  },
+}
+```
+
+With that override:
+
+- `message.filePath: "media/shared/a.png"` is eligible
+- `image.image: "media/shared/a.png"` is eligible
+- `pdf.pdf: "media/shared/a.pdf"` is eligible
+- old default paths like `"./tmp/a.png"` are no longer whitelisted unless you include them explicitly
+
+<Note>
+Operator tip: keep this list short and use dedicated staging folders for Shared attachments. This setting is a path-prefix whitelist, not a trust bypass.
+</Note>
+
+---
+
 ## Channels
 
 Each channel starts automatically when its config section exists (unless `enabled: false`).

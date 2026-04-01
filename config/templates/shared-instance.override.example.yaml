@@ -1,0 +1,12 @@
+# Shared Instance Override Example
+# 日期：2026-03-29
+# 用途：示例 override 模板
+
+instance:
+  name: "shared-instance-a"
+  port: 3101
+
+paths:
+  profile: "/opt/shared-instances/instance-a/profile"
+  stateDir: "/opt/shared-instances/instance-a/state"
+  logDir: "/opt/shared-instances/instance-a/logs"

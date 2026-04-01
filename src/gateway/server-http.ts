@@ -34,6 +34,7 @@ import {
   handleControlUiHttpRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
+import { handleOpenAiEmbeddingsHttpRequest } from "./embeddings-http.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import {
   extractHookToken,
@@ -55,6 +56,7 @@ import {
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
+import { handleOpenAiModelsHttpRequest } from "./models-http.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
@@ -74,6 +76,7 @@ import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleSessionKillHttpRequest } from "./session-kill-http.js";
 import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
+import { handleSharedInstanceHttpRequest } from "./shared-instance-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -772,6 +775,7 @@ export function createGatewayHttpServer(opts: {
     rateLimiter,
     getReadiness,
   } = opts;
+  const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
         void handleRequest(req, res);
@@ -811,6 +815,30 @@ export function createGatewayHttpServer(opts: {
         {
           name: "hooks",
           run: () => handleHooksRequest(req, res),
+        },
+        {
+          name: "models",
+          run: () =>
+            openAiCompatEnabled
+              ? handleOpenAiModelsHttpRequest(req, res, {
+                  auth: resolvedAuth,
+                  trustedProxies,
+                  allowRealIpFallback,
+                  rateLimiter,
+                })
+              : false,
+        },
+        {
+          name: "embeddings",
+          run: () =>
+            openAiCompatEnabled
+              ? handleOpenAiEmbeddingsHttpRequest(req, res, {
+                  auth: resolvedAuth,
+                  trustedProxies,
+                  allowRealIpFallback,
+                  rateLimiter,
+                })
+              : false,
         },
         {
           name: "tools-invoke",
@@ -906,6 +934,10 @@ export function createGatewayHttpServer(opts: {
           run: () => canvasHost.handleHttpRequest(req, res),
         });
       }
+      requestStages.push({
+        name: "shared-instance-http",
+        run: () => handleSharedInstanceHttpRequest(req, res),
+      });
       // Plugin routes run before the Control UI SPA catch-all so explicitly
       // registered plugin endpoints stay reachable. Core built-in gateway
       // routes above still keep precedence on overlapping paths.

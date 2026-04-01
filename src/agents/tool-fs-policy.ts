@@ -5,6 +5,11 @@ export type ToolFsPolicy = {
   workspaceOnly: boolean;
 };
 
+export type SharedAwareToolFsPolicy = ToolFsPolicy & {
+  scopedRootRequired?: boolean;
+  denyAbsolutePaths?: boolean;
+};
+
 export function createToolFsPolicy(params: { workspaceOnly?: boolean }): ToolFsPolicy {
   return {
     workspaceOnly: params.workspaceOnly === true,

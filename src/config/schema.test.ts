@@ -231,6 +231,33 @@ describe("config schema", () => {
     });
   });
 
+  it("accepts web fetch maxResponseBytes in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          maxResponseBytes: 2_000_000,
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.maxResponseBytes).toBe(2_000_000);
+  });
+
+  it("accepts shared local-source validation at the top-level tools config", () => {
+    const parsed = ToolsSchema.parse({
+      shared: {
+        localSourceValidation: {
+          allowedPathPrefixes: ["media/shared/", "./tmp/"],
+        },
+      },
+    });
+
+    expect(parsed?.shared?.localSourceValidation?.allowedPathPrefixes).toEqual([
+      "media/shared/",
+      "./tmp/",
+    ]);
+  });
+
   it("rejects unknown keys inside web fetch firecrawl config", () => {
     expect(() =>
       ToolsSchema.parse({

@@ -327,6 +327,7 @@ export const ToolsWebFetchSchema = z
     enabled: z.boolean().optional(),
     maxChars: z.number().int().positive().optional(),
     maxCharsCap: z.number().int().positive().optional(),
+    maxResponseBytes: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
@@ -554,9 +555,24 @@ const CommonToolPolicyFields = {
   byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
 };
 
+const SharedLocalSourceValidationSchema = z
+  .object({
+    allowedPathPrefixes: z.array(z.string().min(1)).optional(),
+  })
+  .strict()
+  .optional();
+
+const SharedToolsSchema = z
+  .object({
+    localSourceValidation: SharedLocalSourceValidationSchema,
+  })
+  .strict()
+  .optional();
+
 export const AgentToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
+    shared: SharedToolsSchema,
     elevated: z
       .object({
         enabled: z.boolean().optional(),
@@ -807,6 +823,7 @@ export const AgentEntrySchema = z
 export const ToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
+    shared: SharedToolsSchema,
     web: ToolsWebSchema,
     media: ToolsMediaSchema,
     links: ToolsLinksSchema,

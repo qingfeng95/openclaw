@@ -1,0 +1,24 @@
+# Shared Instance Base Template
+# 日期：2026-03-29
+# 用途：Shared 实例基础模板占位
+
+instance:
+  name: "<instance-name>"
+  env: "shared-internal"
+  port: 0
+
+paths:
+  profile: "<profile-path>"
+  stateDir: "<state-dir>"
+  logDir: "<log-dir>"
+
+shared:
+  enabled: true
+  usage:
+    enabled: true
+  audit:
+    enabled: true
+  localSourceValidation:
+    allowedPathPrefixes:
+      - "./"
+      - "tmp/"

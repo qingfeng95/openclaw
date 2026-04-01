@@ -336,6 +336,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Enables elevated tool execution path when sender and policy checks pass. Keep disabled in public/shared channels and enable only for trusted owner-operated contexts.",
   "tools.elevated.allowFrom":
     "Sender allow rules for elevated tools, usually keyed by channel/provider identity formats. Use narrow, explicit identities so elevated commands cannot be triggered by unintended users.",
+  "tools.shared":
+    "Shared-runtime lightweight tool policy knobs. Use these only to tune the small local-source allowlist used by Shared message/image/pdf flows.",
+  "tools.shared.localSourceValidation":
+    "Shared local-source validation settings for lightweight message/image/pdf inputs. This only widens which relative path prefixes are considered eligible local sources; other Shared safety checks still apply.",
+  "tools.shared.localSourceValidation.allowedPathPrefixes":
+    "Relative path prefixes allowed for Shared local message/image/pdf sources. Defaults to ./, .\\, tmp/, tmp\\, ./tmp/, and .\\tmp\\. Paths still must stay relative, cannot escape with .., cannot use file:// or http(s), and message/image/pdf size/type/action limits still apply.",
   "tools.subagents":
     "Tool policy wrapper for spawned subagents to restrict or expand tool availability compared to parent defaults. Use this to keep delegated agent capabilities scoped to task intent.",
   "tools.subagents.tools":
@@ -683,6 +689,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":
     "Hard cap for web_fetch maxChars (applies to config and tool calls).",
+  "tools.web.fetch.maxResponseBytes": "Max download size before truncation.",
   "tools.web.fetch.timeoutSeconds": "Timeout in seconds for web_fetch requests.",
   "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
   "tools.web.fetch.maxRedirects": "Maximum redirects allowed for web_fetch (default: 3).",

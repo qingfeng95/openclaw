@@ -29,6 +29,18 @@ describe("classifyControlUiRequest", () => {
         expected: { kind: "not-control-ui" as const },
       },
       {
+        name: "keeps shared version endpoint outside the SPA catch-all",
+        pathname: "/version",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps shared usage summary endpoint outside the SPA catch-all",
+        pathname: "/shared/usage/summary",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
         name: "keeps plugin routes outside the SPA catch-all",
         pathname: "/plugins/webhook",
         method: "GET",

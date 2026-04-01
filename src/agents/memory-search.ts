@@ -1,3 +1,5 @@
+import { resolveMemoryStorePathForScope } from "../multitenant/integration/memory-hook.js";
+import { getCurrentRuntimeScope } from "../multitenant/scope/request-context.js";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
@@ -132,6 +134,10 @@ function normalizeSources(
 }
 
 function resolveStorePath(agentId: string, raw?: string): string {
+  const scopedPath = resolveMemoryStorePathForScope(getCurrentRuntimeScope() ?? undefined);
+  if (scopedPath) {
+    return scopedPath;
+  }
   const stateDir = resolveStateDir(process.env, os.homedir);
   const fallback = path.join(stateDir, "memory", `${agentId}.sqlite`);
   if (!raw) {

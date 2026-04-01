@@ -86,13 +86,14 @@ run_restart() {
 detect_service_name() {
   local configured_name="$1"
   local candidate_name="$2"
+  local unit_name="${candidate_name}.service"
 
   if [ -n "$configured_name" ]; then
     printf '%s\n' "$configured_name"
     return
   fi
 
-  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -Fxq "${candidate_name}.service"; then
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "$unit_name" --no-legend 2>/dev/null | grep -Fq "$unit_name"; then
     printf '%s\n' "$candidate_name"
     return
   fi

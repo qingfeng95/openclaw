@@ -67,7 +67,14 @@ done
 shared_deploy_assert_repo "$REPO_ROOT"
 
 PNPM_CMD="${SHARED_CONSOLE_DEPLOY_PNPM_CMD:-$(shared_deploy_pnpm_cmd)}"
-INSTALL_CMD="${SHARED_CONSOLE_DEPLOY_INSTALL_CMD:-$PNPM_CMD install --frozen-lockfile}"
+if [ -n "${SHARED_CONSOLE_DEPLOY_INSTALL_CMD:-}" ]; then
+  INSTALL_CMD="$SHARED_CONSOLE_DEPLOY_INSTALL_CMD"
+elif [ -f "$REPO_ROOT/pnpm-lock.yaml" ]; then
+  INSTALL_CMD="$PNPM_CMD install --frozen-lockfile"
+else
+  shared_deploy_warn "pnpm-lock.yaml not found under $REPO_ROOT; falling back to --no-frozen-lockfile"
+  INSTALL_CMD="$PNPM_CMD install --no-frozen-lockfile"
+fi
 APP_BUILD_CMD="${SHARED_CONSOLE_DEPLOY_BUILD_CMD:-$PNPM_CMD build}"
 WEB_BUILD_CMD="${SHARED_CONSOLE_DEPLOY_WEB_BUILD_CMD:-$PNPM_CMD shared-console:build}"
 

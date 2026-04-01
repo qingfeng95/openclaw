@@ -83,12 +83,32 @@ run_restart() {
   shared_deploy_warn "skip $label rollout because no service or restart command is configured"
 }
 
+detect_service_name() {
+  local configured_name="$1"
+  local candidate_name="$2"
+
+  if [ -n "$configured_name" ]; then
+    printf '%s\n' "$configured_name"
+    return
+  fi
+
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -Fxq "${candidate_name}.service"; then
+    printf '%s\n' "$candidate_name"
+    return
+  fi
+
+  printf '%s\n' ""
+}
+
+API_SERVICE_NAME="$(detect_service_name "${SHARED_CONSOLE_API_SERVICE:-}" "shared-console-api")"
+WEB_SERVICE_NAME="$(detect_service_name "${SHARED_CONSOLE_WEB_SERVICE:-}" "shared-console-web")"
+
 if [ "$TARGET" = "api" ] || [ "$TARGET" = "all" ]; then
-  run_restart "shared-console-api" "${SHARED_CONSOLE_API_SERVICE:-}" "${SHARED_CONSOLE_API_RESTART_CMD:-}"
+  run_restart "shared-console-api" "$API_SERVICE_NAME" "${SHARED_CONSOLE_API_RESTART_CMD:-}"
 fi
 
 if [ "$TARGET" = "web" ] || [ "$TARGET" = "all" ]; then
-  run_restart "shared-console-web" "${SHARED_CONSOLE_WEB_SERVICE:-}" "${SHARED_CONSOLE_WEB_RESTART_CMD:-}"
+  run_restart "shared-console-web" "$WEB_SERVICE_NAME" "${SHARED_CONSOLE_WEB_RESTART_CMD:-}"
 fi
 
 shared_deploy_log "rollout completed for target=$TARGET"

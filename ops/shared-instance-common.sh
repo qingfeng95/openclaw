@@ -16,6 +16,52 @@ shared_ops_default_instances_root() {
   printf '%s\n' "$(shared_ops_repo_root)/.shared-instances"
 }
 
+shared_ops_default_container_repo_root() {
+  if [ -n "${OPENCLAW_CONTAINER_REPO_ROOT:-}" ]; then
+    printf '%s\n' "$OPENCLAW_CONTAINER_REPO_ROOT"
+    return
+  fi
+  printf '%s\n' "/opt/shared-console/repo"
+}
+
+shared_ops_instances_root_kind() {
+  local root="${1:-}"
+  case "$root" in
+    *dedicated*)
+      printf '%s\n' "dedicated"
+      ;;
+    *)
+      printf '%s\n' "shared"
+      ;;
+  esac
+}
+
+shared_ops_default_container_instances_root() {
+  local host_root="${1:-}"
+
+  if [ -n "${OPENCLAW_CONTAINER_INSTANCES_ROOT:-}" ]; then
+    printf '%s\n' "$OPENCLAW_CONTAINER_INSTANCES_ROOT"
+    return
+  fi
+
+  case "$(shared_ops_instances_root_kind "$host_root")" in
+    dedicated)
+      if [ -n "${OPENCLAW_CONTAINER_DEDICATED_INSTANCES_ROOT:-}" ]; then
+        printf '%s\n' "$OPENCLAW_CONTAINER_DEDICATED_INSTANCES_ROOT"
+        return
+      fi
+      printf '%s\n' "/opt/dedicated-instances"
+      ;;
+    *)
+      if [ -n "${OPENCLAW_CONTAINER_SHARED_INSTANCES_ROOT:-}" ]; then
+        printf '%s\n' "$OPENCLAW_CONTAINER_SHARED_INSTANCES_ROOT"
+        return
+      fi
+      printf '%s\n' "/opt/shared-instances"
+      ;;
+  esac
+}
+
 shared_ops_log() {
   printf '[shared-instance] %s\n' "$*"
 }
@@ -81,6 +127,40 @@ shared_ops_load_instance_env() {
   : "${INSTANCE_LOG_DIR:?missing INSTANCE_LOG_DIR in instance.env}"
   : "${INSTANCE_RUN_DIR:?missing INSTANCE_RUN_DIR in instance.env}"
   : "${INSTANCE_PID_FILE:?missing INSTANCE_PID_FILE in instance.env}"
+}
+
+shared_ops_container_selector() {
+  if [ -n "${INSTANCE_CONTAINER_NAME:-}" ]; then
+    printf '%s\n' "$INSTANCE_CONTAINER_NAME"
+    return
+  fi
+  if [ -n "${INSTANCE_CONTAINER_ID:-}" ]; then
+    printf '%s\n' "$INSTANCE_CONTAINER_ID"
+    return
+  fi
+  shared_ops_fail "instance $INSTANCE_ID is missing INSTANCE_CONTAINER_NAME / INSTANCE_CONTAINER_ID"
+}
+
+shared_ops_docker_exec() {
+  local selector="$1"
+  shift
+  docker exec "$selector" "$@"
+}
+
+shared_ops_container_pid_is_running() {
+  local selector="$1"
+  local pid="${2:-}"
+  [ -n "$pid" ] || return 1
+  shared_ops_docker_exec "$selector" sh -lc 'kill -0 "$1" 2>/dev/null' sh "$pid" >/dev/null 2>&1
+}
+
+shared_ops_container_http_ok() {
+  local selector="$1"
+  local url="$2"
+  local timeout_seconds="${3:-3}"
+  local timeout_ms=$((timeout_seconds * 1000))
+
+  shared_ops_docker_exec "$selector" node -e "const http = require('node:http'); const url = process.argv[1]; const timeoutMs = Number(process.argv[2]); let done = false; const finish = (ok) => { if (done) return; done = true; clearTimeout(timer); process.exit(ok ? 0 : 1); }; const req = http.get(url, (res) => { res.resume(); finish(res.statusCode === 200); }); req.on('error', () => finish(false)); const timer = setTimeout(() => { req.destroy(); finish(false); }, timeoutMs); timer.unref?.();" "$url" "$timeout_ms" >/dev/null 2>&1
 }
 
 shared_ops_pid_is_running() {

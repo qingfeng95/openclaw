@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CrewClaw 值班台</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="background-glow background-glow-a"></div>
+    <div class="background-glow background-glow-b"></div>
+    <div class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">CrewClaw 值班台</p>
+          <h1>共享实例值班总览</h1>
+          <p class="hero-copy">
+            这里展示的是共享实例的运行情况，可以理解为“共享池值班台”。
+            当前页面除了共享实例，也开始纳入单独实例和容器信息。值班管理员和运营人员可以在这里快速判断：
+            哪些实例能正常接单、哪些需要处理、实例现在跑在宿主机还是容器里，以及容器当前状态。
+          </p>
+        </div>
+        <div class="hero-controls">
+          <label class="field">
+            <span>API 地址</span>
+            <input id="api-base-input" type="text" spellcheck="false" />
+          </label>
+          <div class="inline-actions">
+            <button id="apply-api-base-button" class="button button-primary" type="button">
+              连接
+            </button>
+            <button id="refresh-button" class="button" type="button">刷新</button>
+          </div>
+          <label class="toggle">
+            <input id="auto-refresh-checkbox" type="checkbox" />
+            <span>15 秒自动刷新</span>
+          </label>
+          <p id="connection-note" class="connection-note">尚未加载数据。</p>
+        </div>
+      </header>
+
+      <section class="summary-grid" id="summary-grid"></section>
+
+      <section class="overview-grid">
+        <section class="panel overview-panel">
+          <div class="panel-header">
+            <div>
+              <p class="section-kicker">待处理</p>
+              <h2>需要优先处理的共享实例</h2>
+            </div>
+          </div>
+          <div id="watchlist-panel" class="watchlist-panel"></div>
+        </section>
+
+        <section class="panel overview-panel">
+          <div class="panel-header">
+            <div>
+              <p class="section-kicker">近期情况</p>
+              <h2>最近大家在共享实例上最常遇到什么</h2>
+            </div>
+          </div>
+          <div id="hotspot-panel" class="hotspot-panel"></div>
+        </section>
+      </section>
+
+      <section class="panel containers-section">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">容器总览</p>
+            <h2>当前已纳管的 CrewClaw / OpenClaw 容器</h2>
+          </div>
+        </div>
+        <div id="containers-panel" class="containers-panel"></div>
+        <div id="container-logs-panel" class="container-logs-panel empty-state" style="min-height: 180px;">
+          选一个容器查看最近日志，或直接在容器卡片上执行启动、停止、重启。
+        </div>
+      </section>
+
+      <main class="main-grid">
+        <section class="panel panel-list">
+          <div class="panel-header">
+            <div>
+              <p class="section-kicker">共享实例</p>
+              <h2>当前共享实例列表</h2>
+            </div>
+            <input
+              id="instance-filter-input"
+              class="search-input"
+              type="search"
+              placeholder="按实例 ID / 名称 / 版本筛选"
+            />
+          </div>
+          <div id="instances-list" class="instances-list"></div>
+        </section>
+
+        <section class="panel panel-detail">
+          <div class="panel-header">
+            <div>
+              <p class="section-kicker">实例详情</p>
+              <h2>当前实例详情</h2>
+            </div>
+            <span id="detail-badge" class="detail-badge">未选择实例</span>
+          </div>
+          <div id="detail-empty" class="empty-state">
+            从左侧选择实例，或先创建一个新的实例。
+          </div>
+          <div id="detail-content" class="detail-content hidden">
+            <section class="detail-card">
+              <div class="detail-card-header">
+                <h3 id="detail-title">-</h3>
+                <div class="inline-actions">
+                  <button id="start-button" class="button button-primary" type="button">启动</button>
+                  <button id="stop-button" class="button" type="button">停止</button>
+                  <button id="restart-button" class="button" type="button">重启</button>
+                </div>
+              </div>
+              <div id="detail-meta" class="meta-grid"></div>
+            </section>
+
+            <section class="detail-card">
+              <div class="detail-card-header">
+                <h3>实例改名</h3>
+              </div>
+              <form id="rename-form" class="form-grid">
+                <label class="field">
+                  <span>显示名称</span>
+                  <input id="rename-input" name="name" type="text" required />
+                </label>
+                <div class="inline-actions">
+                  <button class="button button-primary" type="submit">保存名称</button>
+                </div>
+              </form>
+            </section>
+
+            <section class="detail-card">
+              <div class="detail-card-header">
+                <h3>值班检查结果</h3>
+              </div>
+              <div id="probe-grid" class="probe-grid"></div>
+            </section>
+
+            <section class="detail-card">
+              <div class="detail-card-header">
+                <h3>最近使用概况</h3>
+              </div>
+              <div id="usage-summary" class="usage-summary"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="panel panel-create">
+          <div class="panel-header">
+            <div>
+              <p class="section-kicker">新增实例</p>
+              <h2>新增共享实例 / 单独实例</h2>
+            </div>
+          </div>
+          <form id="create-form" class="form-grid">
+            <label class="field">
+              <span>实例类型</span>
+              <select name="pool">
+                <option value="shared">共享实例</option>
+                <option value="dedicated">单独实例</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>部署位置</span>
+              <select name="runtimeKind">
+                <option value="host">宿主机运行</option>
+                <option value="container">已有容器</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>实例 ID</span>
+              <input name="id" type="text" required placeholder="shared-a / solo-a" />
+            </label>
+            <label class="field">
+              <span>显示名称</span>
+              <input name="name" type="text" placeholder="共享实例 A / 单间虾 A" />
+            </label>
+            <label class="field">
+              <span>端口</span>
+              <input name="port" type="number" min="1" max="65535" placeholder="18840" />
+            </label>
+            <label class="field">
+              <span>运行档案名</span>
+              <input name="profile" type="text" placeholder="shared-alpha / dedicated-alpha" />
+            </label>
+            <label class="field">
+              <span>实例模板</span>
+              <input name="template" type="text" placeholder="shared-instance.internal-test.yaml" />
+            </label>
+            <label class="field">
+              <span>监听地址</span>
+              <input name="bind" type="text" placeholder="127.0.0.1" />
+            </label>
+            <label class="field">
+              <span>目标容器名</span>
+              <input name="containerName" type="text" placeholder="crewclaw-gateway" />
+            </label>
+            <label class="field">
+              <span>目标容器 ID</span>
+              <input name="containerId" type="text" placeholder="可选，容器名填了通常就够了" />
+            </label>
+            <div class="inline-actions">
+              <button class="button button-primary" type="submit">创建实例</button>
+              <button id="create-reset-button" class="button" type="reset">清空</button>
+            </div>
+          </form>
+          <div class="callout">
+            如果部署位置选“已有容器”，这次会把实例正式标记成容器目标实例。
+            这类实例不会再按宿主机方式启动，后续应通过容器侧链路接管。
+          </div>
+        </section>
+      </main>
+
+      <section class="panel dedicated-section">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">单独实例</p>
+            <h2>当前单独实例（单间虾）列表</h2>
+          </div>
+        </div>
+        <div id="dedicated-instances-list" class="instances-list"></div>
+      </section>
+
+      <section class="status-panel">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">最近动态</p>
+            <h2>最近操作记录</h2>
+          </div>
+        </div>
+        <div id="status-feed" class="status-feed"></div>
+      </section>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

@@ -16,6 +16,13 @@ Options:
   --template <name>     Template label or path (default: internal-test)
   --bind <mode>         Gateway bind mode (default: loopback)
   --name <name>         Human-readable instance name
+  --runtime-kind <kind> host | container (default: host)
+  --container-name <n>  Target container name for container-managed instances
+  --container-id <id>   Target container id for container-managed instances
+  --container-repo-root <dir>
+                        Repo root inside the target container
+  --container-instances-root <dir>
+                        Instances root inside the target container
   -h, --help            Show this help
 EOF
 }
@@ -29,6 +36,11 @@ INSTANCE_PORT=""
 INSTANCE_PROFILE=""
 INSTANCE_TEMPLATE="internal-test"
 INSTANCE_BIND="loopback"
+INSTANCE_RUNTIME_KIND="host"
+INSTANCE_CONTAINER_NAME=""
+INSTANCE_CONTAINER_ID=""
+INSTANCE_CONTAINER_REPO_ROOT=""
+INSTANCE_CONTAINER_ROOT=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -66,6 +78,31 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -gt 0 ] || shared_ops_fail "--name requires a value"
       INSTANCE_NAME="$1"
       ;;
+    --runtime-kind)
+      shift
+      [ "$#" -gt 0 ] || shared_ops_fail "--runtime-kind requires a value"
+      INSTANCE_RUNTIME_KIND="$1"
+      ;;
+    --container-name)
+      shift
+      [ "$#" -gt 0 ] || shared_ops_fail "--container-name requires a value"
+      INSTANCE_CONTAINER_NAME="$1"
+      ;;
+    --container-id)
+      shift
+      [ "$#" -gt 0 ] || shared_ops_fail "--container-id requires a value"
+      INSTANCE_CONTAINER_ID="$1"
+      ;;
+    --container-repo-root)
+      shift
+      [ "$#" -gt 0 ] || shared_ops_fail "--container-repo-root requires a value"
+      INSTANCE_CONTAINER_REPO_ROOT="$1"
+      ;;
+    --container-instances-root)
+      shift
+      [ "$#" -gt 0 ] || shared_ops_fail "--container-instances-root requires a value"
+      INSTANCE_CONTAINER_ROOT="$1"
+      ;;
     --*)
       shared_ops_fail "unknown option: $1"
       ;;
@@ -102,6 +139,26 @@ case "$INSTANCE_BIND" in
     ;;
 esac
 
+case "$INSTANCE_RUNTIME_KIND" in
+  host|container)
+    ;;
+  *)
+    shared_ops_fail "unsupported runtime kind: $INSTANCE_RUNTIME_KIND"
+    ;;
+esac
+
+if [ "$INSTANCE_RUNTIME_KIND" = "container" ] && [ -z "$INSTANCE_CONTAINER_NAME" ] && [ -z "$INSTANCE_CONTAINER_ID" ]; then
+  shared_ops_fail "container runtime requires --container-name or --container-id"
+fi
+
+if [ "$INSTANCE_RUNTIME_KIND" = "container" ] && [ -z "$INSTANCE_CONTAINER_REPO_ROOT" ]; then
+  INSTANCE_CONTAINER_REPO_ROOT="$(shared_ops_default_container_repo_root)"
+fi
+
+if [ "$INSTANCE_RUNTIME_KIND" = "container" ] && [ -z "$INSTANCE_CONTAINER_ROOT" ]; then
+  INSTANCE_CONTAINER_ROOT="$(shared_ops_default_container_instances_root "$INSTANCES_ROOT")"
+fi
+
 if [ -n "$INSTANCE_PORT" ]; then
   shared_ops_validate_port "$INSTANCE_PORT" || shared_ops_fail "invalid port: $INSTANCE_PORT"
   shared_ops_port_is_available "$INSTANCE_PORT" || shared_ops_fail "port is already in use: $INSTANCE_PORT"
@@ -122,6 +179,23 @@ INSTANCE_TMP_DIR="$INSTANCE_DIR/tmp"
 INSTANCE_CONFIG_PATH="$INSTANCE_CONFIG_DIR/openclaw.instance.json5"
 INSTANCE_ENV_PATH="$INSTANCE_DIR/instance.env"
 INSTANCE_PID_FILE="$INSTANCE_RUN_DIR/gateway.pid"
+INSTANCE_CONTAINER_DIR=""
+INSTANCE_CONTAINER_CONFIG_PATH=""
+INSTANCE_CONTAINER_LOG_DIR=""
+INSTANCE_CONTAINER_RUN_DIR=""
+INSTANCE_CONTAINER_PROFILE_DIR=""
+INSTANCE_CONTAINER_STATE_DIR=""
+INSTANCE_CONTAINER_PID_FILE=""
+
+if [ "$INSTANCE_RUNTIME_KIND" = "container" ]; then
+  INSTANCE_CONTAINER_DIR="$INSTANCE_CONTAINER_ROOT/$INSTANCE_ID"
+  INSTANCE_CONTAINER_CONFIG_PATH="$INSTANCE_CONTAINER_DIR/config/openclaw.instance.json5"
+  INSTANCE_CONTAINER_LOG_DIR="$INSTANCE_CONTAINER_DIR/logs"
+  INSTANCE_CONTAINER_RUN_DIR="$INSTANCE_CONTAINER_DIR/run"
+  INSTANCE_CONTAINER_PROFILE_DIR="$INSTANCE_CONTAINER_DIR/profile"
+  INSTANCE_CONTAINER_STATE_DIR="$INSTANCE_CONTAINER_DIR/state"
+  INSTANCE_CONTAINER_PID_FILE="$INSTANCE_CONTAINER_RUN_DIR/gateway.pid"
+fi
 
 mkdir -p \
   "$INSTANCE_TEMPLATE_DIR" \
@@ -177,10 +251,22 @@ INSTANCE_ID="$INSTANCE_ID"
 INSTANCE_NAME="$INSTANCE_NAME"
 INSTANCE_DIR="$INSTANCE_DIR"
 INSTANCE_ROOT="$INSTANCES_ROOT"
+INSTANCE_RUNTIME_KIND="$INSTANCE_RUNTIME_KIND"
 INSTANCE_PORT="$INSTANCE_PORT"
 INSTANCE_PROFILE="$INSTANCE_PROFILE"
 INSTANCE_BIND="$INSTANCE_BIND"
 INSTANCE_TEMPLATE="$SELECTED_TEMPLATE_NAME"
+INSTANCE_CONTAINER_NAME="$INSTANCE_CONTAINER_NAME"
+INSTANCE_CONTAINER_ID="$INSTANCE_CONTAINER_ID"
+INSTANCE_CONTAINER_REPO_ROOT="$INSTANCE_CONTAINER_REPO_ROOT"
+INSTANCE_CONTAINER_ROOT="$INSTANCE_CONTAINER_ROOT"
+INSTANCE_CONTAINER_DIR="$INSTANCE_CONTAINER_DIR"
+INSTANCE_CONTAINER_CONFIG_PATH="$INSTANCE_CONTAINER_CONFIG_PATH"
+INSTANCE_CONTAINER_LOG_DIR="$INSTANCE_CONTAINER_LOG_DIR"
+INSTANCE_CONTAINER_RUN_DIR="$INSTANCE_CONTAINER_RUN_DIR"
+INSTANCE_CONTAINER_PROFILE_DIR="$INSTANCE_CONTAINER_PROFILE_DIR"
+INSTANCE_CONTAINER_STATE_DIR="$INSTANCE_CONTAINER_STATE_DIR"
+INSTANCE_CONTAINER_PID_FILE="$INSTANCE_CONTAINER_PID_FILE"
 INSTANCE_LOG_DIR="$INSTANCE_LOG_DIR"
 INSTANCE_RUN_DIR="$INSTANCE_RUN_DIR"
 INSTANCE_PROFILE_DIR="$INSTANCE_PROFILE_DIR"

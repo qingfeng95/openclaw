@@ -67,21 +67,37 @@ shared_ops_is_integer "$HTTP_TIMEOUT" || shared_ops_fail "invalid timeout: $HTTP
 INSTANCE_DIR="$(shared_ops_resolve_instance_dir "$INSTANCES_ROOT" "$INSTANCE_SELECTOR")"
 shared_ops_load_instance_env "$INSTANCE_DIR"
 
+container_selector=""
+curl_json() {
+  shared_ops_curl_json "$1" "$2"
+}
+
 if [ -f "$INSTANCE_PID_FILE" ]; then
   gateway_pid="$(cat "$INSTANCE_PID_FILE" 2>/dev/null || true)"
 else
   gateway_pid=""
 fi
 
-if ! shared_ops_pid_is_running "$gateway_pid"; then
+if [ "${INSTANCE_RUNTIME_KIND:-host}" = "container" ]; then
+  shared_ops_require_command docker
+  container_selector="$(shared_ops_container_selector)"
+  if ! shared_ops_container_pid_is_running "$container_selector" "$gateway_pid"; then
+    shared_ops_fail "container-managed instance process is not running: $INSTANCE_ID"
+  fi
+  curl_json() {
+    local url="$1"
+    local timeout="$2"
+    shared_ops_docker_exec "$container_selector" node -e "const http = require('node:http'); const url = process.argv[1]; const timeoutMs = Number(process.argv[2]); let body = ''; let done = false; const finish = (code, output) => { if (done) return; done = true; clearTimeout(timer); if (output) process.stdout.write(output); process.exit(code); }; const req = http.get(url, (res) => { res.setEncoding('utf8'); res.on('data', (chunk) => { body += chunk; }); res.on('end', () => finish(res.statusCode === 200 ? 0 : 1, body)); }); req.on('error', () => finish(1, '')); const timer = setTimeout(() => { req.destroy(); finish(1, ''); }, timeoutMs); timer.unref?.();" "$url" "$((timeout * 1000))"
+  }
+elif ! shared_ops_pid_is_running "$gateway_pid"; then
   shared_ops_fail "instance process is not running: $INSTANCE_ID"
 fi
 
-health_payload="$(shared_ops_curl_json "$(shared_ops_gateway_health_url "$INSTANCE_PORT")" "$HTTP_TIMEOUT")" || exit 2
-ready_payload="$(shared_ops_curl_json "$(shared_ops_gateway_ready_url "$INSTANCE_PORT")" "$HTTP_TIMEOUT")" || exit 2
+health_payload="$(curl_json "$(shared_ops_gateway_health_url "$INSTANCE_PORT")" "$HTTP_TIMEOUT")" || exit 2
+ready_payload="$(curl_json "$(shared_ops_gateway_ready_url "$INSTANCE_PORT")" "$HTTP_TIMEOUT")" || exit 2
 
 version_source="http"
-if version_payload="$(shared_ops_curl_json "$(shared_ops_gateway_version_url "$INSTANCE_PORT")" "$HTTP_TIMEOUT" 2>/dev/null)"; then
+if version_payload="$(curl_json "$(shared_ops_gateway_version_url "$INSTANCE_PORT")" "$HTTP_TIMEOUT" 2>/dev/null)"; then
   if shared_ops_payload_is_html "$version_payload"; then
     version_payload=""
   fi
@@ -100,7 +116,7 @@ fi
 
 usage_log_path="$OPENCLAW_STATE_DIR/logs/shared-tool-usage.jsonl"
 usage_summary_source="http"
-if usage_summary_payload="$(shared_ops_curl_json "$(shared_ops_gateway_usage_summary_url "$INSTANCE_PORT")" "$HTTP_TIMEOUT" 2>/dev/null)"; then
+if usage_summary_payload="$(curl_json "$(shared_ops_gateway_usage_summary_url "$INSTANCE_PORT")" "$HTTP_TIMEOUT" 2>/dev/null)"; then
   if shared_ops_payload_is_html "$usage_summary_payload"; then
     usage_summary_payload=""
   fi

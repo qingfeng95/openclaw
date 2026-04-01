@@ -1,23 +1,69 @@
-# Shared Console Ops Skeleton
+# Shared Console Ops
 
-日期：2026-03-29
+日期：2026-04-01
 
-这个目录用于放 Shared 内测控制台与 Shared 实例的部署、健康检查、升级、回滚脚本。
+这个目录用于承载 Shared 控制台与 Shared/Dedicated 实例的部署、启停、健康检查、升级和回滚脚本。
 
-当前建议脚本：
-- `create-container.sh`
+## 当前已可用
+
+实例生命周期：
 - `create-instance.sh`
 - `start-instance.sh`
 - `stop-instance.sh`
 - `restart-instance.sh`
 - `healthcheck-instance.sh`
+- `backup-instance-config.sh`
 - `smoke-shared-instance.sh`
+
+第一批部署自动化：
+- `deploy-pull.sh`
+- `deploy-build.sh`
+- `deploy-rollout.sh`
+- `shared-console-deploy-common.sh`
+
+说明：
+- `deploy-pull.sh`：在 Ubuntu 部署目录拉取指定 remote/ref，并输出当前 commit
+- `deploy-build.sh`：执行 `pnpm install`、`pnpm build`、`pnpm shared-console:build`
+- `deploy-rollout.sh`：重启 `shared-console-api` / 前端服务，优先走 systemd，也支持自定义命令
+- `deploy-server.sh`：一键串联 pull、build、rollout，适合 Ubuntu 服务器直接执行
+
+## 仍待实现
+
+- `create-container.sh`
 - `upgrade-instance.sh`
 - `rollback-instance.sh`
-- `backup-instance-config.sh`
 
-建议原则：
-- 所有脚本都输出明确 exit code
-- 所有脚本都要有基本日志
-- 脚本尽量幂等
-- 控制台后端优先调用这些脚本，而不是拼装复杂命令
+## 推荐部署顺序
+
+```bash
+ops/deploy-server.sh --remote origin --ref main --target all
+```
+
+如需分步执行：
+
+```bash
+ops/deploy-pull.sh --remote origin --ref main
+ops/deploy-build.sh
+ops/deploy-rollout.sh --target all
+```
+
+如果 API 和前端由 systemd 管理，建议至少设置：
+
+```bash
+export SHARED_CONSOLE_API_SERVICE=shared-console-api
+export SHARED_CONSOLE_WEB_SERVICE=shared-console-web
+```
+
+如果不是 systemd，也可以改成自定义命令：
+
+```bash
+export SHARED_CONSOLE_API_RESTART_CMD='supervisorctl restart shared-console-api'
+export SHARED_CONSOLE_WEB_RESTART_CMD='supervisorctl restart shared-console-web'
+```
+
+## 设计原则
+
+- 所有脚本都输出明确日志
+- 尽量保持幂等
+- 部署脚本优先失败得早、原因可读
+- 控制台后端优先调用这些脚本，而不是把复杂运维逻辑散落在 TypeScript 里

@@ -2,30 +2,43 @@ import { spawn } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isMainModule } from "../../../src/infra/is-main.js";
+import { isMainModule } from "../../../src/infra/is-main.ts";
+import {
+  getSharedConsoleContainerBySelector,
+  listSharedConsoleContainers,
+  readSharedConsoleContainerLogs,
+  runDockerCommandDefault,
+  runSharedConsoleContainerAction,
+  type DockerCommandInvocation,
+  type DockerCommandResult,
+  type DockerContainerRecord,
+} from "./containers.ts";
 import {
   getSharedInstanceById,
   listSharedInstances,
   resolveSharedConsoleApiBashPath,
+  resolveSharedConsoleDedicatedInstancesRoot,
   resolveSharedConsoleInstancesRoot,
   resolveSharedConsoleRepoRoot,
   updateSharedInstanceName,
   validateSharedInstanceId,
   type BuildSharedInstanceRecordOptions,
   type SharedInstanceRecord,
-} from "./instances.js";
+} from "./instances.ts";
 
 const DEFAULT_SHARED_CONSOLE_API_HOST = "127.0.0.1";
 const DEFAULT_SHARED_CONSOLE_API_PORT = 43100;
 const DEFAULT_SHARED_CONSOLE_API_PROBE_TIMEOUT_MS = 1_500;
 
 type JsonValue = Record<string, unknown>;
+type InstancePool = "shared" | "dedicated";
 
 export type SharedConsoleApiConfig = {
   host: string;
   port: number;
   repoRoot: string;
-  instancesRoot: string;
+  sharedInstancesRoot: string;
+  dedicatedInstancesRoot: string;
   bashPath: string;
   probeTimeoutMs: number;
 };
@@ -46,6 +59,8 @@ export type SharedConsoleApiDeps = {
   config?: Partial<SharedConsoleApiConfig>;
   fetchImpl?: typeof fetch;
   runOpsCommand?: (invocation: OpsCommandInvocation) => Promise<OpsCommandResult>;
+  listDockerContainers?: () => Promise<DockerContainerRecord[]>;
+  runDockerCommand?: (invocation: DockerCommandInvocation) => Promise<DockerCommandResult>;
 };
 
 class HttpError extends Error {
@@ -91,7 +106,8 @@ export function resolveSharedConsoleApiConfig(
     host: env.SHARED_CONSOLE_API_HOST?.trim() || DEFAULT_SHARED_CONSOLE_API_HOST,
     port: parsePositiveInteger(env.SHARED_CONSOLE_API_PORT, DEFAULT_SHARED_CONSOLE_API_PORT),
     repoRoot,
-    instancesRoot: resolveSharedConsoleInstancesRoot(env, repoRoot),
+    sharedInstancesRoot: resolveSharedConsoleInstancesRoot(env, repoRoot),
+    dedicatedInstancesRoot: resolveSharedConsoleDedicatedInstancesRoot(env, repoRoot),
     bashPath: resolveSharedConsoleApiBashPath(env),
     probeTimeoutMs: parsePositiveInteger(
       env.SHARED_CONSOLE_API_PROBE_TIMEOUT_MS,
@@ -177,19 +193,81 @@ function readOptionalPort(body: Record<string, unknown>): number | undefined {
   return Math.trunc(parsed);
 }
 
-function parseInstanceRoute(url: URL):
+function readInstancePool(body: Record<string, unknown>, fallback: InstancePool): InstancePool {
+  const value = readOptionalString(body, "pool");
+  if (!value) {
+    return fallback;
+  }
+  if (value === "shared" || value === "dedicated") {
+    return value;
+  }
+  throw new HttpError(400, '"pool" must be "shared" or "dedicated".');
+}
+
+function readRuntimeKind(body: Record<string, unknown>): "host" | "container" {
+  const value = readOptionalString(body, "runtimeKind");
+  if (!value || value === "host") {
+    return "host";
+  }
+  if (value === "container") {
+    return "container";
+  }
+  throw new HttpError(400, '"runtimeKind" must be "host" or "container".');
+}
+
+function resolveInstancesRoot(config: SharedConsoleApiConfig, pool: InstancePool): string {
+  return pool === "dedicated" ? config.dedicatedInstancesRoot : config.sharedInstancesRoot;
+}
+
+function parseNamedInstanceRoute(
+  url: URL,
+  basePath: string,
+  pool: InstancePool,
+):
+  | { kind: "collection"; pool: InstancePool }
+  | { kind: "item"; pool: InstancePool; id: string }
+  | { kind: "action"; pool: InstancePool; id: string; action: "start" | "stop" | "restart" }
+  | null {
+  if (url.pathname === basePath) {
+    return { kind: "collection", pool };
+  }
+  const itemMatch = url.pathname.match(new RegExp(`^${basePath}/([^/]+)$`));
+  if (itemMatch) {
+    return { kind: "item", pool, id: decodeURIComponent(itemMatch[1] ?? "") };
+  }
+  const actionMatch = url.pathname.match(new RegExp(`^${basePath}/([^/]+)/(start|stop|restart)$`));
+  if (actionMatch) {
+    return {
+      kind: "action",
+      pool,
+      id: decodeURIComponent(actionMatch[1] ?? ""),
+      action: actionMatch[2] as "start" | "stop" | "restart",
+    };
+  }
+  return null;
+}
+
+function parseInstanceRoute(url: URL) {
+  return (
+    parseNamedInstanceRoute(url, "/api/instances", "shared") ??
+    parseNamedInstanceRoute(url, "/api/shared-instances", "shared") ??
+    parseNamedInstanceRoute(url, "/api/dedicated-instances", "dedicated")
+  );
+}
+
+function parseContainerRoute(url: URL):
   | { kind: "collection" }
-  | { kind: "item"; id: string }
+  | { kind: "logs"; id: string }
   | { kind: "action"; id: string; action: "start" | "stop" | "restart" }
   | null {
-  if (url.pathname === "/api/instances") {
+  if (url.pathname === "/api/containers") {
     return { kind: "collection" };
   }
-  const itemMatch = url.pathname.match(/^\/api\/instances\/([^/]+)$/);
-  if (itemMatch) {
-    return { kind: "item", id: decodeURIComponent(itemMatch[1] ?? "") };
+  const logsMatch = url.pathname.match(/^\/api\/containers\/([^/]+)\/logs$/);
+  if (logsMatch) {
+    return { kind: "logs", id: decodeURIComponent(logsMatch[1] ?? "") };
   }
-  const actionMatch = url.pathname.match(/^\/api\/instances\/([^/]+)\/(start|stop|restart)$/);
+  const actionMatch = url.pathname.match(/^\/api\/containers\/([^/]+)\/(start|stop|restart)$/);
   if (actionMatch) {
     return {
       kind: "action",
@@ -198,6 +276,18 @@ function parseInstanceRoute(url: URL):
     };
   }
   return null;
+}
+
+function readTailQuery(url: URL, defaultValue = 160): number {
+  const value = url.searchParams.get("tail")?.trim();
+  if (!value) {
+    return defaultValue;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new HttpError(400, '"tail" must be a positive integer.');
+  }
+  return parsed;
 }
 
 function resolveRecordOptions(
@@ -209,6 +299,34 @@ function resolveRecordOptions(
     includeProbe,
     fetchImpl: deps.fetchImpl,
     probeTimeoutMs: config.probeTimeoutMs,
+    runContainerProbe:
+      includeProbe
+        ? async (instance, request) => {
+            const selector = instance.runtime.containerName?.trim() || instance.runtime.containerId?.trim();
+            if (!selector) {
+              throw new Error(`Instance ${instance.id} is container-managed but has no container selector.`);
+            }
+            if (!instance.port) {
+              throw new Error(`Instance ${instance.id} is missing port for container probe.`);
+            }
+            const runDockerCommand = deps.runDockerCommand ?? runDockerCommandDefault;
+            const result = await runDockerCommand({
+              args: [
+                "exec",
+                selector,
+                "node",
+                "-e",
+                "const http=require('node:http');const url=process.argv[1];const timeoutMs=Number(process.argv[2]);let body='';let done=false;const finish=(code,output='')=>{if(done)return;done=true;clearTimeout(timer);if(output)process.stdout.write(output);process.exit(code);};const req=http.get(url,(res)=>{res.setEncoding('utf8');res.on('data',(chunk)=>{body+=chunk;});res.on('end',()=>finish(res.statusCode===200?0:1,body));});req.on('error',(error)=>finish(1,String(error?.message??error??'')));const timer=setTimeout(()=>{req.destroy();finish(1,'timeout');},timeoutMs);timer.unref?.();",
+                `http://127.0.0.1:${instance.port}${request.path}`,
+                String(request.timeoutMs),
+              ],
+            });
+            if (result.exitCode !== 0) {
+              throw new Error(result.stderr.trim() || result.stdout.trim() || "container probe failed");
+            }
+            return JSON.parse(result.stdout);
+          }
+        : undefined,
   };
 }
 
@@ -222,11 +340,12 @@ function ensureInstanceId(id: string): string {
 async function ensureInstance(
   config: SharedConsoleApiConfig,
   deps: SharedConsoleApiDeps,
+  pool: InstancePool,
   id: string,
   includeProbe: boolean,
 ): Promise<SharedInstanceRecord> {
   const instance = await getSharedInstanceById(
-    config.instancesRoot,
+    resolveInstancesRoot(config, pool),
     ensureInstanceId(id),
     resolveRecordOptions(config, deps, includeProbe),
   );
@@ -245,7 +364,7 @@ async function runOpsCommandDefault(
     cwd: config.repoRoot,
     env: {
       ...process.env,
-      OPENCLAW_SHARED_INSTANCES_ROOT: config.instancesRoot,
+      OPENCLAW_SHARED_INSTANCES_ROOT: config.sharedInstancesRoot,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -291,16 +410,25 @@ async function handleCreateInstance(
   res: ServerResponse,
   config: SharedConsoleApiConfig,
   deps: SharedConsoleApiDeps,
+  fallbackPool: InstancePool,
 ): Promise<void> {
   const body = await readJsonBody(req);
+  const pool = readInstancePool(body, fallbackPool);
   const id = ensureInstanceId(readOptionalString(body, "id") ?? "");
   const name = readOptionalString(body, "name");
   const port = readOptionalPort(body);
-  const profile = readOptionalString(body, "profile");
+  const runtimeKind = readRuntimeKind(body);
+  const containerName = readOptionalString(body, "containerName");
+  const containerId = readOptionalString(body, "containerId");
+  if (runtimeKind === "container" && !containerName && !containerId) {
+    throw new HttpError(400, 'Container-managed instances require "containerName" or "containerId".');
+  }
+  const profile =
+    readOptionalString(body, "profile") ?? `${pool === "dedicated" ? "dedicated" : "shared"}-${id}`;
   const template = readOptionalString(body, "template");
   const bind = readOptionalString(body, "bind");
 
-  const args = [id, "--root", config.instancesRoot];
+  const args = [id, "--root", resolveInstancesRoot(config, pool)];
   if (typeof port === "number") {
     args.push("--port", String(port));
   }
@@ -316,14 +444,22 @@ async function handleCreateInstance(
   if (name) {
     args.push("--name", name);
   }
+  args.push("--runtime-kind", runtimeKind);
+  if (containerName) {
+    args.push("--container-name", containerName);
+  }
+  if (containerId) {
+    args.push("--container-id", containerId);
+  }
 
   const result = await runOpsCommand(config, deps, {
     scriptName: "create-instance.sh",
     args,
   });
-  const instance = await ensureInstance(config, deps, id, false);
+  const instance = await ensureInstance(config, deps, pool, id, false);
   sendJson(res, 201, {
     ok: true,
+    pool,
     item: instance,
     command: {
       scriptName: "create-instance.sh",
@@ -338,9 +474,10 @@ async function handlePatchInstance(
   res: ServerResponse,
   config: SharedConsoleApiConfig,
   deps: SharedConsoleApiDeps,
+  pool: InstancePool,
   id: string,
 ): Promise<void> {
-  await ensureInstance(config, deps, id, false);
+  await ensureInstance(config, deps, pool, id, false);
   const body = await readJsonBody(req);
   const allowedKeys = new Set(["name"]);
   const unsupportedKeys = Object.keys(body).filter((key) => !allowedKeys.has(key));
@@ -354,8 +491,8 @@ async function handlePatchInstance(
   if (!name) {
     throw new HttpError(400, 'PATCH requires a non-empty "name".');
   }
-  await updateSharedInstanceName(config.instancesRoot, id, name);
-  const instance = await ensureInstance(config, deps, id, false);
+  await updateSharedInstanceName(resolveInstancesRoot(config, pool), id, name);
+  const instance = await ensureInstance(config, deps, pool, id, false);
   sendJson(res, 200, {
     ok: true,
     item: instance,
@@ -366,15 +503,16 @@ async function handleAction(
   res: ServerResponse,
   config: SharedConsoleApiConfig,
   deps: SharedConsoleApiDeps,
+  pool: InstancePool,
   id: string,
   action: "start" | "stop" | "restart",
 ): Promise<void> {
-  await ensureInstance(config, deps, id, false);
+  await ensureInstance(config, deps, pool, id, false);
   const result = await runOpsCommand(config, deps, {
     scriptName: `${action}-instance.sh`,
-    args: [id, "--root", config.instancesRoot],
+    args: [id, "--root", resolveInstancesRoot(config, pool)],
   });
-  const instance = await ensureInstance(config, deps, id, action !== "stop");
+  const instance = await ensureInstance(config, deps, pool, id, action !== "stop");
   sendJson(res, 200, {
     ok: true,
     action,
@@ -383,6 +521,91 @@ async function handleAction(
       scriptName: `${action}-instance.sh`,
       stdout: result.stdout.trim(),
       stderr: result.stderr.trim(),
+    },
+  });
+}
+
+async function listCurrentInstances(
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+  pool: InstancePool = "shared",
+): Promise<SharedInstanceRecord[]> {
+  return await listSharedInstances(resolveInstancesRoot(config, pool), resolveRecordOptions(config, deps, false));
+}
+
+async function listAllCurrentInstances(
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+): Promise<SharedInstanceRecord[]> {
+  const [sharedItems, dedicatedItems] = await Promise.all([
+    listCurrentInstances(config, deps, "shared"),
+    listCurrentInstances(config, deps, "dedicated"),
+  ]);
+  return [...sharedItems, ...dedicatedItems];
+}
+
+async function handleContainerAction(
+  res: ServerResponse,
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+  id: string,
+  action: "start" | "stop" | "restart",
+): Promise<void> {
+  const instances = await listAllCurrentInstances(config, deps);
+  const container = await getSharedConsoleContainerBySelector(id, instances, {
+    listDockerContainers: deps.listDockerContainers,
+  });
+  if (!container) {
+    throw new HttpError(404, `Container not found: ${id}`, "not_found");
+  }
+  if (container.source !== "docker") {
+    throw new HttpError(409, `Container ${container.name} is not currently manageable through Docker.`, "conflict");
+  }
+  const result = await runSharedConsoleContainerAction(id, action, instances, {
+    listDockerContainers: deps.listDockerContainers,
+    runDockerCommand: deps.runDockerCommand,
+  });
+  sendJson(res, 200, {
+    ok: true,
+    action,
+    item: result.container,
+    command: {
+      engine: "docker",
+      stdout: result.command.stdout.trim(),
+      stderr: result.command.stderr.trim(),
+      exitCode: result.command.exitCode,
+    },
+  });
+}
+
+async function handleContainerLogs(
+  res: ServerResponse,
+  url: URL,
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+  id: string,
+): Promise<void> {
+  const instances = await listAllCurrentInstances(config, deps);
+  const container = await getSharedConsoleContainerBySelector(id, instances, {
+    listDockerContainers: deps.listDockerContainers,
+  });
+  if (!container) {
+    throw new HttpError(404, `Container not found: ${id}`, "not_found");
+  }
+  if (container.source !== "docker") {
+    throw new HttpError(409, `Container ${container.name} does not have Docker logs available yet.`, "conflict");
+  }
+  const result = await readSharedConsoleContainerLogs(id, instances, {
+    listDockerContainers: deps.listDockerContainers,
+    runDockerCommand: deps.runDockerCommand,
+    tail: readTailQuery(url),
+  });
+  sendJson(res, 200, {
+    ok: true,
+    item: result.container,
+    logs: {
+      tail: result.tail,
+      text: result.text,
     },
   });
 }
@@ -409,6 +632,43 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
           return;
         }
 
+        const containerRoute = parseContainerRoute(url);
+        if (containerRoute) {
+          if (containerRoute.kind === "collection") {
+            if (req.method !== "GET") {
+              sendError(res, 405, "Method Not Allowed", "method_not_allowed");
+              return;
+            }
+            const instances = await listAllCurrentInstances(config, deps);
+            const snapshot = await listSharedConsoleContainers(instances, {
+              listDockerContainers: deps.listDockerContainers,
+              includeAllDockerContainers: readBooleanQuery(url, "all", false),
+            });
+            sendJson(res, 200, {
+              ok: true,
+              items: snapshot.items,
+              meta: snapshot.meta,
+            });
+            return;
+          }
+
+          if (containerRoute.kind === "logs") {
+            if (req.method !== "GET") {
+              sendError(res, 405, "Method Not Allowed", "method_not_allowed");
+              return;
+            }
+            await handleContainerLogs(res, url, config, deps, containerRoute.id);
+            return;
+          }
+
+          if (req.method !== "POST") {
+            sendError(res, 405, "Method Not Allowed", "method_not_allowed");
+            return;
+          }
+          await handleContainerAction(res, config, deps, containerRoute.id, containerRoute.action);
+          return;
+        }
+
         const route = parseInstanceRoute(url);
         if (!route) {
           sendError(res, 404, "Not Found", "not_found");
@@ -419,21 +679,22 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
           if (req.method === "GET") {
             const includeProbe = readBooleanQuery(url, "includeProbe", false);
             const items = await listSharedInstances(
-              config.instancesRoot,
+              resolveInstancesRoot(config, route.pool),
               resolveRecordOptions(config, deps, includeProbe),
             );
             sendJson(res, 200, {
               ok: true,
               items,
               meta: {
-                instancesRoot: config.instancesRoot,
+                pool: route.pool,
+                instancesRoot: resolveInstancesRoot(config, route.pool),
                 includeProbe,
               },
             });
             return;
           }
           if (req.method === "POST") {
-            await handleCreateInstance(req, res, config, deps);
+            await handleCreateInstance(req, res, config, deps, route.pool);
             return;
           }
           sendError(res, 405, "Method Not Allowed", "method_not_allowed");
@@ -443,7 +704,7 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
         if (route.kind === "item") {
           if (req.method === "GET") {
             const includeProbe = readBooleanQuery(url, "includeProbe", true);
-            const item = await ensureInstance(config, deps, route.id, includeProbe);
+            const item = await ensureInstance(config, deps, route.pool, route.id, includeProbe);
             sendJson(res, 200, {
               ok: true,
               item,
@@ -451,7 +712,7 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
             return;
           }
           if (req.method === "PATCH") {
-            await handlePatchInstance(req, res, config, deps, route.id);
+            await handlePatchInstance(req, res, config, deps, route.pool, route.id);
             return;
           }
           sendError(res, 405, "Method Not Allowed", "method_not_allowed");
@@ -462,7 +723,7 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
           sendError(res, 405, "Method Not Allowed", "method_not_allowed");
           return;
         }
-        await handleAction(res, config, deps, route.id, route.action);
+        await handleAction(res, config, deps, route.pool, route.id, route.action);
       } catch (error) {
         if (error instanceof HttpError) {
           sendError(res, error.statusCode, error.message, error.errorType);
@@ -512,7 +773,7 @@ export async function startSharedConsoleApiServer(deps: SharedConsoleApiDeps = {
 async function main(): Promise<void> {
   const { config } = await startSharedConsoleApiServer();
   process.stdout.write(
-    `[shared-console-api] listening on http://${config.host}:${config.port} (instancesRoot=${config.instancesRoot})\n`,
+    `[shared-console-api] listening on http://${config.host}:${config.port} (sharedRoot=${config.sharedInstancesRoot}, dedicatedRoot=${config.dedicatedInstancesRoot})\n`,
   );
 }
 

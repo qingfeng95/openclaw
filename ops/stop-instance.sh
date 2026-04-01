@@ -55,6 +55,63 @@ done
 INSTANCE_DIR="$(shared_ops_resolve_instance_dir "$INSTANCES_ROOT" "$INSTANCE_SELECTOR")"
 shared_ops_load_instance_env "$INSTANCE_DIR"
 
+if [ "${INSTANCE_RUNTIME_KIND:-host}" = "container" ]; then
+  shared_ops_require_command docker
+
+  container_selector="$(shared_ops_container_selector)"
+  container_pid_file="${INSTANCE_CONTAINER_PID_FILE:-}"
+  [ -n "$container_pid_file" ] || shared_ops_fail "container-managed instance is missing INSTANCE_CONTAINER_PID_FILE"
+
+  container_pid=""
+  if [ -f "$INSTANCE_PID_FILE" ]; then
+    container_pid="$(cat "$INSTANCE_PID_FILE" 2>/dev/null || true)"
+  fi
+  if [ -z "$container_pid" ]; then
+    container_pid="$(shared_ops_docker_exec "$container_selector" sh -lc 'cat "$1" 2>/dev/null || true' sh "$container_pid_file" 2>/dev/null || true)"
+  fi
+
+  if [ -z "$container_pid" ]; then
+    rm -f "$INSTANCE_PID_FILE"
+    shared_ops_log "instance $INSTANCE_ID is already stopped"
+    exit 0
+  fi
+
+  if ! shared_ops_container_pid_is_running "$container_selector" "$container_pid"; then
+    rm -f "$INSTANCE_PID_FILE"
+    shared_ops_docker_exec "$container_selector" sh -lc 'rm -f "$1"' sh "$container_pid_file" >/dev/null 2>&1 || true
+    shared_ops_warn "removed stale container pid file for instance $INSTANCE_ID"
+    exit 0
+  fi
+
+  shared_ops_docker_exec "$container_selector" sh -lc 'kill "$1" 2>/dev/null || true' sh "$container_pid" >/dev/null 2>&1 || true
+
+  for _ in $(seq 1 40); do
+    if ! shared_ops_container_pid_is_running "$container_selector" "$container_pid"; then
+      rm -f "$INSTANCE_PID_FILE"
+      shared_ops_docker_exec "$container_selector" sh -lc 'rm -f "$1"' sh "$container_pid_file" >/dev/null 2>&1 || true
+      shared_ops_log "instance $INSTANCE_ID stopped in container $container_selector"
+      exit 0
+    fi
+    sleep 0.25
+  done
+
+  if [ "$FORCE_KILL" -eq 1 ]; then
+    shared_ops_warn "graceful stop timed out; sending SIGKILL to container pid=$container_pid"
+    shared_ops_docker_exec "$container_selector" sh -lc 'kill -9 "$1" 2>/dev/null || true' sh "$container_pid" >/dev/null 2>&1 || true
+    for _ in $(seq 1 20); do
+      if ! shared_ops_container_pid_is_running "$container_selector" "$container_pid"; then
+        rm -f "$INSTANCE_PID_FILE"
+        shared_ops_docker_exec "$container_selector" sh -lc 'rm -f "$1"' sh "$container_pid_file" >/dev/null 2>&1 || true
+        shared_ops_log "instance $INSTANCE_ID force-stopped in container $container_selector"
+        exit 0
+      fi
+      sleep 0.25
+    done
+  fi
+
+  shared_ops_fail "failed to stop container-managed instance $INSTANCE_ID (pid=$container_pid, container=$container_selector)"
+fi
+
 if [ ! -f "$INSTANCE_PID_FILE" ]; then
   shared_ops_log "instance $INSTANCE_ID is already stopped"
   exit 0

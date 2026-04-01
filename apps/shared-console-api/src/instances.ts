@@ -33,6 +33,11 @@ export type SharedInstanceRecord = {
   port: number | null;
   profile: string | null;
   template: string | null;
+  runtime: {
+    location: "host" | "container";
+    containerName: string | null;
+    containerId: string | null;
+  };
   paths: {
     root: string;
     dir: string;
@@ -57,6 +62,13 @@ export type BuildSharedInstanceRecordOptions = {
   fetchImpl?: typeof fetch;
   includeProbe?: boolean;
   probeTimeoutMs?: number;
+  runContainerProbe?: (
+    instance: SharedInstanceRecord,
+    request: {
+      path: string;
+      timeoutMs: number;
+    },
+  ) => Promise<unknown>;
 };
 
 type InstanceEnvRecord = Record<string, string>;
@@ -117,6 +129,30 @@ function readPidValue(value: string | undefined): number | null {
   return pid && pid > 0 ? pid : null;
 }
 
+function resolveInstanceRuntime(envRecord: InstanceEnvRecord): {
+  location: "host" | "container";
+  containerName: string | null;
+  containerId: string | null;
+} {
+  const runtimeKind = envRecord.INSTANCE_RUNTIME_KIND?.trim().toLowerCase();
+  const containerName = normalizeNullableString(
+    envRecord.INSTANCE_CONTAINER_NAME ?? envRecord.OPENCLAW_CONTAINER,
+  );
+  const containerId = normalizeNullableString(envRecord.INSTANCE_CONTAINER_ID);
+  if (runtimeKind === "container" || containerName || containerId) {
+    return {
+      location: "container",
+      containerName,
+      containerId,
+    };
+  }
+  return {
+    location: "host",
+    containerName,
+    containerId,
+  };
+}
+
 function isProcessRunning(pid: number | null): boolean {
   if (!pid) {
     return false;
@@ -161,6 +197,7 @@ async function probeSharedInstance(
   instance: SharedInstanceRecord,
   fetchImpl: typeof fetch,
   timeoutMs: number,
+  runContainerProbe?: BuildSharedInstanceRecordOptions["runContainerProbe"],
 ): Promise<SharedInstanceProbe> {
   const checkedAt = new Date().toISOString();
   if (instance.process.state !== "running" || !instance.port) {
@@ -175,11 +212,20 @@ async function probeSharedInstance(
   }
 
   const baseUrl = `http://127.0.0.1:${instance.port}`;
+  const readProbe = (endpointPath: string) => {
+    if (instance.runtime.location === "container" && runContainerProbe) {
+      return runContainerProbe(instance, {
+        path: endpointPath,
+        timeoutMs,
+      });
+    }
+    return readJsonResponse(fetchImpl, `${baseUrl}${endpointPath}`, timeoutMs);
+  };
   const results = await Promise.allSettled([
-    readJsonResponse(fetchImpl, `${baseUrl}/healthz`, timeoutMs),
-    readJsonResponse(fetchImpl, `${baseUrl}/readyz`, timeoutMs),
-    readJsonResponse(fetchImpl, `${baseUrl}/version`, timeoutMs),
-    readJsonResponse(fetchImpl, `${baseUrl}/shared/usage/summary`, timeoutMs),
+    readProbe("/healthz"),
+    readProbe("/readyz"),
+    readProbe("/version"),
+    readProbe("/shared/usage/summary"),
   ]);
 
   const livePayload =
@@ -226,6 +272,17 @@ export function resolveSharedConsoleInstancesRoot(
   );
 }
 
+export function resolveSharedConsoleDedicatedInstancesRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  repoRoot = resolveSharedConsoleRepoRoot(),
+): string {
+  return path.resolve(
+    env.SHARED_CONSOLE_API_DEDICATED_INSTANCES_ROOT?.trim() ||
+      env.OPENCLAW_DEDICATED_INSTANCES_ROOT?.trim() ||
+      path.join(repoRoot, ".dedicated-instances"),
+  );
+}
+
 export function resolveSharedConsoleApiBashPath(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env.SHARED_CONSOLE_API_BASH?.trim() || env.BASH?.trim();
   if (configured) {
@@ -268,7 +325,9 @@ export async function buildSharedInstanceRecord(
     ? await fs.readFile(pidFile, "utf8").then((value) => value.trim()).catch(() => "")
     : "";
   const pid = readPidValue(pidRaw);
-  const processState: SharedInstanceProcessState = isProcessRunning(pid) ? "running" : "stopped";
+  const runtime = resolveInstanceRuntime(envRecord);
+  const processState: SharedInstanceProcessState =
+    runtime.location === "container" ? (pid ? "running" : "stopped") : isProcessRunning(pid) ? "running" : "stopped";
 
   const record: SharedInstanceRecord = {
     id: normalizeNullableString(envRecord.INSTANCE_ID) ?? path.basename(instanceDir),
@@ -277,6 +336,7 @@ export async function buildSharedInstanceRecord(
     port: normalizeNullableNumber(envRecord.INSTANCE_PORT),
     profile: normalizeNullableString(envRecord.INSTANCE_PROFILE),
     template: normalizeNullableString(envRecord.INSTANCE_TEMPLATE),
+    runtime,
     paths: {
       root: path.dirname(instanceDir),
       dir: instanceDir,
@@ -305,6 +365,7 @@ export async function buildSharedInstanceRecord(
     record,
     options.fetchImpl ?? fetch,
     options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+    options.runContainerProbe,
   );
   return record;
 }

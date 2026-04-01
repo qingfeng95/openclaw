@@ -1,0 +1,18 @@
+[Unit]
+Description=OpenClaw Shared Console API
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/www/openclaw/repo
+EnvironmentFile=/etc/openclaw/shared-console.env
+ExecStart=/usr/bin/node --experimental-strip-types /www/openclaw/repo/apps/shared-console-api/src/server.ts
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

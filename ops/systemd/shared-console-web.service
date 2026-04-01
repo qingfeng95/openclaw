@@ -1,0 +1,18 @@
+[Unit]
+Description=OpenClaw Shared Console Web
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/www/openclaw/repo
+EnvironmentFile=/etc/openclaw/shared-console.env
+ExecStart=/usr/bin/node /www/openclaw/repo/apps/shared-console/server.mjs
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

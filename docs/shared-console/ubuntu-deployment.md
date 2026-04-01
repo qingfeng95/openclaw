@@ -87,6 +87,17 @@ export OPENCLAW_CONTAINER_SHARED_INSTANCES_ROOT=/www/openclaw/shared-instances
 export OPENCLAW_CONTAINER_DEDICATED_INSTANCES_ROOT=/www/openclaw/dedicated-instances
 ```
 
+如使用 systemd，可以直接基于仓库内模板安装：
+
+```bash
+sudo bash ops/install-systemd-services.sh --start
+```
+
+模板文件：
+- `ops/systemd/shared-console-api.service`
+- `ops/systemd/shared-console-web.service`
+- `ops/shared-console.env.example`
+
 运行方式：
 
 ```bash

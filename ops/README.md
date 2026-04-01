@@ -19,6 +19,7 @@
 - `deploy-pull.sh`
 - `deploy-build.sh`
 - `deploy-rollout.sh`
+- `install-systemd-services.sh`
 - `shared-console-deploy-common.sh`
 
 说明：
@@ -26,6 +27,7 @@
 - `deploy-build.sh`：执行 `pnpm install`、`pnpm build`、`pnpm shared-console:build`
 - `deploy-rollout.sh`：重启 `shared-console-api` / 前端服务，优先走 systemd，也支持自定义命令
 - `deploy-server.sh`：一键串联 pull、build、rollout，适合 Ubuntu 服务器直接执行
+- `install-systemd-services.sh`：安装 `/etc/systemd/system/shared-console-api.service` 和 `shared-console-web.service`
 
 ## 仍待实现
 
@@ -52,6 +54,12 @@ ops/deploy-rollout.sh --target all
 ```bash
 export SHARED_CONSOLE_API_SERVICE=shared-console-api
 export SHARED_CONSOLE_WEB_SERVICE=shared-console-web
+```
+
+首次在服务器安装 systemd 服务：
+
+```bash
+sudo bash ops/install-systemd-services.sh --start
 ```
 
 如果不是 systemd，也可以改成自定义命令：

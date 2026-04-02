@@ -193,6 +193,46 @@ function readOptionalPort(body: Record<string, unknown>): number | undefined {
   return Math.trunc(parsed);
 }
 
+function readOptionalBooleanBody(
+  body: Record<string, unknown>,
+  key: string,
+  defaultValue: boolean,
+): boolean {
+  const value = body[key];
+  if (value == null) {
+    return defaultValue;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "1" || normalized === "true" || normalized === "yes") {
+      return true;
+    }
+    if (normalized === "0" || normalized === "false" || normalized === "no") {
+      return false;
+    }
+  }
+  throw new HttpError(400, `"${key}" must be a boolean.`);
+}
+
+function readOptionalPositiveIntegerBody(
+  body: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = body[key];
+  if (value == null) {
+    return undefined;
+  }
+  const parsed =
+    typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) : NaN;
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new HttpError(400, `"${key}" must be a positive integer.`);
+  }
+  return Math.trunc(parsed);
+}
+
 function readInstancePool(body: Record<string, unknown>, fallback: InstancePool): InstancePool {
   const value = readOptionalString(body, "pool");
   if (!value) {
@@ -217,6 +257,40 @@ function readRuntimeKind(body: Record<string, unknown>): "host" | "container" {
 
 function resolveInstancesRoot(config: SharedConsoleApiConfig, pool: InstancePool): string {
   return pool === "dedicated" ? config.dedicatedInstancesRoot : config.sharedInstancesRoot;
+}
+
+function validateContainerName(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
+}
+
+function resolveRequestedContainerNames(body: Record<string, unknown>): string[] {
+  const exactName = readOptionalString(body, "name");
+  const namePrefix = readOptionalString(body, "namePrefix");
+  const count = readOptionalPositiveIntegerBody(body, "count") ?? 1;
+
+  if (exactName && namePrefix) {
+    throw new HttpError(400, 'Provide either "name" or "namePrefix", not both.');
+  }
+  if (!exactName && !namePrefix) {
+    throw new HttpError(400, 'Container creation requires "name" or "namePrefix".');
+  }
+  if (exactName && count !== 1) {
+    throw new HttpError(400, '"count" greater than 1 requires "namePrefix".');
+  }
+
+  const names = exactName
+    ? [exactName]
+    : count === 1
+      ? [namePrefix ?? ""]
+      : Array.from({ length: count }, (_, index) => `${namePrefix}-${index + 1}`);
+
+  if (names.some((value) => !validateContainerName(value))) {
+    throw new HttpError(
+      400,
+      'Container names must start with a letter or digit and contain only letters, digits, ".", "_" or "-".',
+    );
+  }
+  return names;
 }
 
 function parseNamedInstanceRoute(
@@ -611,6 +685,79 @@ async function handleContainerLogs(
   });
 }
 
+async function handleCreateContainers(
+  req: IncomingMessage,
+  res: ServerResponse,
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+): Promise<void> {
+  const body = await readJsonBody(req);
+  const names = resolveRequestedContainerNames(body);
+  const image = readOptionalString(body, "image") ?? "node:22-bookworm-slim";
+  const command = readOptionalString(body, "command");
+  const pullMissing = readOptionalBooleanBody(body, "pullMissing", true);
+  const env = deps.env ?? process.env;
+  const containerRepoRoot = env.OPENCLAW_CONTAINER_REPO_ROOT?.trim() || config.repoRoot;
+  const containerSharedRoot =
+    env.OPENCLAW_CONTAINER_SHARED_INSTANCES_ROOT?.trim() || config.sharedInstancesRoot;
+  const containerDedicatedRoot =
+    env.OPENCLAW_CONTAINER_DEDICATED_INSTANCES_ROOT?.trim() || config.dedicatedInstancesRoot;
+
+  const args = [
+    ...names.flatMap((name) => ["--name", name]),
+    "--image",
+    image,
+    "--repo-root-host",
+    config.repoRoot,
+    "--shared-instances-root-host",
+    config.sharedInstancesRoot,
+    "--dedicated-instances-root-host",
+    config.dedicatedInstancesRoot,
+    "--repo-root-container",
+    containerRepoRoot,
+    "--shared-instances-root-container",
+    containerSharedRoot,
+    "--dedicated-instances-root-container",
+    containerDedicatedRoot,
+  ];
+  if (command) {
+    args.push("--command", command);
+  }
+  if (pullMissing) {
+    args.push("--pull-missing");
+  }
+
+  const result = await runOpsCommand(config, deps, {
+    scriptName: "create-container.sh",
+    args,
+  });
+
+  const instances = await listAllCurrentInstances(config, deps);
+  const snapshot = await listSharedConsoleContainers(instances, {
+    listDockerContainers: deps.listDockerContainers,
+    includeAllDockerContainers: false,
+  });
+  const items = names
+    .map((name) => snapshot.items.find((item) => item.name === name))
+    .filter((value): value is NonNullable<typeof value> => Boolean(value));
+
+  sendJson(res, 201, {
+    ok: true,
+    items,
+    request: {
+      names,
+      image,
+      command: command ?? null,
+      pullMissing,
+    },
+    command: {
+      scriptName: "create-container.sh",
+      stdout: result.stdout.trim(),
+      stderr: result.stderr.trim(),
+    },
+  });
+}
+
 export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): Server {
   const config = {
     ...resolveSharedConsoleApiConfig(deps.env),
@@ -636,6 +783,10 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
         const containerRoute = parseContainerRoute(url);
         if (containerRoute) {
           if (containerRoute.kind === "collection") {
+            if (req.method === "POST") {
+              await handleCreateContainers(req, res, config, deps);
+              return;
+            }
             if (req.method !== "GET") {
               sendError(res, 405, "Method Not Allowed", "method_not_allowed");
               return;

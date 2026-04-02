@@ -69,6 +69,7 @@ async function writeInstance(
 
 async function startTestServer(params: {
   root: string;
+  repoRoot?: string;
   runOpsCommand?: (invocation: OpsCommandInvocation) => Promise<OpsCommandResult>;
   runDockerCommand?: (invocation: { args: string[] }) => Promise<{
     exitCode: number;
@@ -92,6 +93,7 @@ async function startTestServer(params: {
     config: {
       host: "127.0.0.1",
       port: 0,
+      repoRoot: params.repoRoot ?? params.root,
       sharedInstancesRoot: params.root,
       dedicatedInstancesRoot: path.join(params.root, ".dedicated"),
     },
@@ -246,6 +248,176 @@ describe("shared console api", () => {
             ],
           },
         ]);
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("creates a managed container through ops integration", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const dedicatedRoot = path.join(root, ".dedicated");
+      const invocations: OpsCommandInvocation[] = [];
+      const { server, baseUrl } = await startTestServer({
+        root,
+        runOpsCommand: async (invocation) => {
+          invocations.push(invocation);
+          return {
+            exitCode: 0,
+            stdout: "created",
+            stderr: "",
+          };
+        },
+        listDockerContainers: async () => [
+          {
+            id: "cid-worker",
+            name: "openclaw-worker",
+            image: "node:22-bookworm-slim",
+            state: "running",
+            status: "Up 5 seconds",
+            createdAt: "2026-04-02 10:00:00 +0800 CST",
+            ports: [],
+            labels: {
+              "ai.openclaw.shared-console": "managed",
+            },
+          },
+        ],
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/containers`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            name: "openclaw-worker",
+          }),
+        });
+
+        expect(response.status).toBe(201);
+        const payload = await response.json();
+        expect(payload.ok).toBe(true);
+        expect(payload.request).toEqual({
+          names: ["openclaw-worker"],
+          image: "node:22-bookworm-slim",
+          command: null,
+          pullMissing: true,
+        });
+        expect(payload.items).toHaveLength(1);
+        expect(payload.items[0].name).toBe("openclaw-worker");
+        expect(invocations).toEqual([
+          {
+            scriptName: "create-container.sh",
+            args: [
+              "--name",
+              "openclaw-worker",
+              "--image",
+              "node:22-bookworm-slim",
+              "--repo-root-host",
+              root,
+              "--shared-instances-root-host",
+              root,
+              "--dedicated-instances-root-host",
+              dedicatedRoot,
+              "--repo-root-container",
+              root,
+              "--shared-instances-root-container",
+              root,
+              "--dedicated-instances-root-container",
+              dedicatedRoot,
+              "--pull-missing",
+            ],
+          },
+        ]);
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("creates multiple managed containers from a prefix", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const invocations: OpsCommandInvocation[] = [];
+      const { server, baseUrl } = await startTestServer({
+        root,
+        runOpsCommand: async (invocation) => {
+          invocations.push(invocation);
+          return {
+            exitCode: 0,
+            stdout: "created",
+            stderr: "",
+          };
+        },
+        listDockerContainers: async () => [
+          {
+            id: "cid-1",
+            name: "openclaw-batch-1",
+            image: "node:22-bookworm-slim",
+            state: "running",
+            status: "Up 5 seconds",
+            createdAt: "2026-04-02 10:00:00 +0800 CST",
+            ports: [],
+            labels: { "ai.openclaw.shared-console": "managed" },
+          },
+          {
+            id: "cid-2",
+            name: "openclaw-batch-2",
+            image: "node:22-bookworm-slim",
+            state: "running",
+            status: "Up 5 seconds",
+            createdAt: "2026-04-02 10:00:01 +0800 CST",
+            ports: [],
+            labels: { "ai.openclaw.shared-console": "managed" },
+          },
+          {
+            id: "cid-3",
+            name: "openclaw-batch-3",
+            image: "node:22-bookworm-slim",
+            state: "running",
+            status: "Up 5 seconds",
+            createdAt: "2026-04-02 10:00:02 +0800 CST",
+            ports: [],
+            labels: { "ai.openclaw.shared-console": "managed" },
+          },
+        ],
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/containers`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            namePrefix: "openclaw-batch",
+            count: 3,
+          }),
+        });
+
+        expect(response.status).toBe(201);
+        const payload = await response.json();
+        expect(payload.request.names).toEqual([
+          "openclaw-batch-1",
+          "openclaw-batch-2",
+          "openclaw-batch-3",
+        ]);
+        expect(payload.items.map((item: { name: string }) => item.name)).toEqual([
+          "openclaw-batch-1",
+          "openclaw-batch-2",
+          "openclaw-batch-3",
+        ]);
+        expect(invocations[0]).toMatchObject({
+          scriptName: "create-container.sh",
+          args: expect.arrayContaining([
+            "--name",
+            "openclaw-batch-1",
+            "--name",
+            "openclaw-batch-2",
+            "--name",
+            "openclaw-batch-3",
+          ]),
+        });
       } finally {
         await stopServer(server);
       }

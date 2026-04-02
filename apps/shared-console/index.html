@@ -70,6 +70,31 @@
             <h2>当前被实例绑定的容器</h2>
           </div>
         </div>
+        <form id="create-container-form" class="form-grid">
+          <label class="field">
+            <span>容器名 / 前缀</span>
+            <input name="namePrefix" type="text" required placeholder="openclaw-worker" />
+          </label>
+          <label class="field">
+            <span>数量</span>
+            <input name="count" type="number" min="1" max="20" value="1" />
+          </label>
+          <label class="field">
+            <span>镜像</span>
+            <input name="image" type="text" value="node:22-bookworm-slim" />
+          </label>
+          <label class="field">
+            <span>容器启动命令</span>
+            <input name="command" type="text" placeholder="默认保持容器空转，供后续绑定实例" />
+          </label>
+          <div class="inline-actions">
+            <button class="button button-primary" type="submit">创建容器</button>
+          </div>
+        </form>
+        <div class="callout">
+          这里会创建带 OpenClaw 挂载和管理标签的预备容器。
+          数量大于 1 时，会按“容器名 / 前缀-序号”批量创建；创建好后，再到下方“新增实例”里选择“已有容器”并绑定容器名。
+        </div>
         <div id="containers-panel" class="containers-panel"></div>
         <div id="container-logs-panel" class="container-logs-panel empty-state" style="min-height: 180px;">
           这里只展示已被实例绑定或声明过的容器。选一个容器查看最近日志，或对已绑定实例的容器执行启动、停止、重启。
@@ -196,8 +221,9 @@
             </label>
             <label class="field">
               <span>目标容器名</span>
-              <input name="containerName" type="text" placeholder="crewclaw-gateway" />
+              <input name="containerName" type="text" list="container-name-options" placeholder="openclaw-worker-1" />
             </label>
+            <datalist id="container-name-options"></datalist>
             <label class="field">
               <span>目标容器 ID</span>
               <input name="containerId" type="text" placeholder="可选，容器名填了通常就够了" />
@@ -208,8 +234,8 @@
             </div>
           </form>
           <div class="callout">
-            当前页面不会创建 Docker 容器。
-            如果部署位置选“已有容器”，正确顺序是：先在宿主机或编排层准备好容器和挂载，再在这里创建实例并绑定到那个容器。
+            正确顺序是：先在上面的“创建容器”区域预创建容器，再在这里把部署位置选成“已有容器”，并绑定到目标容器名。
+            目标容器名称输入框会列出当前已发现的容器。
             这类实例不会按宿主机方式启动，后续会通过容器侧链路接管。
           </div>
         </section>

@@ -34,6 +34,8 @@ const elements = {
   hotspotPanel: document.querySelector("#hotspot-panel"),
   containersPanel: document.querySelector("#containers-panel"),
   containerLogsPanel: document.querySelector("#container-logs-panel"),
+  createContainerForm: document.querySelector("#create-container-form"),
+  containerNameOptions: document.querySelector("#container-name-options"),
   filterInput: document.querySelector("#instance-filter-input"),
   instancesList: document.querySelector("#instances-list"),
   dedicatedInstancesList: document.querySelector("#dedicated-instances-list"),
@@ -175,6 +177,10 @@ function buildFallbackContainerMeta(instances, error = null) {
 
 function findContainerByName(name) {
   return state.containers.find((item) => item.name === name || item.id === name) ?? null;
+}
+
+function isProvisionedConsoleContainer(container) {
+  return container?.labels?.["ai.openclaw.shared-console"] === "managed";
 }
 
 function instanceApiBase(scope) {
@@ -689,8 +695,7 @@ function renderContainers() {
           : '<div class="container-card-note">当前还没有实例明确绑定到这个容器。</div>';
       const canOperate =
         container.source === "docker" &&
-        Array.isArray(container.attachedInstances) &&
-        container.attachedInstances.length > 0;
+        (((container.attachedInstances?.length ?? 0) > 0) || isProvisionedConsoleContainer(container));
       const actions =
         canOperate
           ? `
@@ -704,7 +709,7 @@ function renderContainers() {
           : container.source === "docker"
             ? `
                 <div class="container-card-note">
-                  这个容器当前没有被任何实例绑定，所以这里只展示状态，不提供容器级操作。
+                  这个容器不是值班台创建的预备容器，当前也没有被任何实例绑定，所以这里只展示状态，不提供容器级操作。
                 </div>
               `
           : `
@@ -729,6 +734,19 @@ function renderContainers() {
         </article>
       `;
     })
+    .join("");
+}
+
+function renderContainerNameOptions() {
+  if (!elements.containerNameOptions) {
+    return;
+  }
+  const names = state.containers
+    .map((container) => container?.name)
+    .filter((value, index, array) => typeof value === "string" && value && array.indexOf(value) === index)
+    .sort((left, right) => left.localeCompare(right, "zh-CN"));
+  elements.containerNameOptions.innerHTML = names
+    .map((name) => `<option value="${escapeHtml(name)}"></option>`)
     .join("");
 }
 
@@ -1019,6 +1037,7 @@ function renderAll() {
   renderWatchlist();
   renderHotspots();
   renderContainers();
+  renderContainerNameOptions();
   renderContainerLogs();
   renderInstancesList();
   renderDedicatedInstancesList();
@@ -1243,6 +1262,62 @@ async function handleCreateSubmit(event) {
   }
 }
 
+async function handleCreateContainerSubmit(event) {
+  event.preventDefault();
+  const formData = new FormData(event.currentTarget);
+  const rawBody = Object.fromEntries(
+    [...formData.entries()].filter(
+      ([, value]) => (typeof value === "string" ? String(value).trim() !== "" : true),
+    ),
+  );
+  const baseName = String(rawBody.namePrefix || "").trim();
+  const count = Math.max(1, Number.parseInt(String(rawBody.count || "1"), 10) || 1);
+  if (!baseName) {
+    pushStatus("error", "创建容器失败", "容器名 / 前缀不能为空。");
+    return;
+  }
+
+  const body =
+    count > 1
+      ? {
+          namePrefix: baseName,
+          count,
+          image: rawBody.image,
+          command: rawBody.command,
+          pullMissing: true,
+        }
+      : {
+          name: baseName,
+          image: rawBody.image,
+          command: rawBody.command,
+          pullMissing: true,
+        };
+
+  setBusy(true);
+  try {
+    const payload = await fetchJson("/api/containers", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const createdNames = (payload.items ?? []).map((item) => item.name).filter(Boolean);
+    pushStatus(
+      "success",
+      `创建容器成功 ${createdNames.length || payload.request?.names?.length || count} 个`,
+      createdNames.join(", ") || payload.command?.stdout || "容器已创建",
+    );
+    event.currentTarget.reset();
+    await loadInstances({ preserveSelection: true });
+    if (createdNames[0]) {
+      await loadContainerLogs(createdNames[0], { announce: false });
+    }
+  } catch (error) {
+    pushStatus("error", "创建容器失败", error.message);
+    updateConnectionNote(`创建容器失败：${error.message}`, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function handleRenameSubmit(event) {
   event.preventDefault();
   if (!state.selectedId) {
@@ -1367,6 +1442,9 @@ function bindEvents() {
   });
   elements.createForm.addEventListener("submit", (event) => {
     void handleCreateSubmit(event);
+  });
+  elements.createContainerForm.addEventListener("submit", (event) => {
+    void handleCreateContainerSubmit(event);
   });
   elements.renameForm.addEventListener("submit", (event) => {
     void handleRenameSubmit(event);

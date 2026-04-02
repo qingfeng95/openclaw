@@ -13,12 +13,14 @@ Options:
   --repo-root <dir>   Deployment repo root (default: repo adjacent to ops/)
   --skip-install      Skip dependency installation
   --skip-app-build    Skip main repo build
+  --skip-ui-build     Skip Control UI build
   --skip-web-build    Skip shared-console frontend build
   -h, --help          Show this help
 
 Environment overrides:
   SHARED_CONSOLE_DEPLOY_INSTALL_CMD
   SHARED_CONSOLE_DEPLOY_BUILD_CMD
+  SHARED_CONSOLE_DEPLOY_UI_BUILD_CMD
   SHARED_CONSOLE_DEPLOY_WEB_BUILD_CMD
 EOF
 }
@@ -32,6 +34,7 @@ fi
 REPO_ROOT="$(shared_deploy_repo_root)"
 SKIP_INSTALL=0
 SKIP_APP_BUILD=0
+SKIP_UI_BUILD=0
 SKIP_WEB_BUILD=0
 
 while [ "$#" -gt 0 ]; do
@@ -50,6 +53,9 @@ while [ "$#" -gt 0 ]; do
       ;;
     --skip-app-build)
       SKIP_APP_BUILD=1
+      ;;
+    --skip-ui-build)
+      SKIP_UI_BUILD=1
       ;;
     --skip-web-build)
       SKIP_WEB_BUILD=1
@@ -76,6 +82,7 @@ else
   INSTALL_CMD="$PNPM_CMD install --no-frozen-lockfile"
 fi
 APP_BUILD_CMD="${SHARED_CONSOLE_DEPLOY_BUILD_CMD:-$PNPM_CMD build}"
+UI_BUILD_CMD="${SHARED_CONSOLE_DEPLOY_UI_BUILD_CMD:-$PNPM_CMD ui:build}"
 WEB_BUILD_CMD="${SHARED_CONSOLE_DEPLOY_WEB_BUILD_CMD:-$PNPM_CMD shared-console:build}"
 
 shared_deploy_log "repo_root=$REPO_ROOT"
@@ -87,6 +94,10 @@ fi
 
 if [ "$SKIP_APP_BUILD" -ne 1 ]; then
   shared_deploy_run_in_repo "$REPO_ROOT" "$APP_BUILD_CMD"
+fi
+
+if [ "$SKIP_UI_BUILD" -ne 1 ]; then
+  shared_deploy_run_in_repo "$REPO_ROOT" "$UI_BUILD_CMD"
 fi
 
 if [ "$SKIP_WEB_BUILD" -ne 1 ]; then

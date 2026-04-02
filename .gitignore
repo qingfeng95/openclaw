@@ -89,6 +89,10 @@ docs/.local/
 tmp/
 IDENTITY.md
 USER.md
+!docs/reference/templates/IDENTITY.md
+!docs/reference/templates/USER.md
+!docs/zh-CN/reference/templates/IDENTITY.md
+!docs/zh-CN/reference/templates/USER.md
 .tgz
 .idea
 

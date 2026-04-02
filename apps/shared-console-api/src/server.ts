@@ -365,6 +365,7 @@ async function runOpsCommandDefault(
     env: {
       ...process.env,
       OPENCLAW_SHARED_INSTANCES_ROOT: config.sharedInstancesRoot,
+      OPENCLAW_DEDICATED_INSTANCES_ROOT: config.dedicatedInstancesRoot,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

@@ -137,6 +137,7 @@ export const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.approvals",
   "operator.pairing",
 ] as const;
+const CONTROL_UI_OPERATOR_SCOPE_SET = new Set<string>(CONTROL_UI_OPERATOR_SCOPES);
 
 export type GatewayConnectAuth = {
   token?: string;
@@ -198,6 +199,7 @@ export type GatewayBrowserClientOptions = {
   url: string;
   token?: string;
   password?: string;
+  requestedScopes?: string[];
   clientName?: GatewayClientName;
   clientVersion?: string;
   platform?: string;
@@ -269,6 +271,37 @@ export function shouldRetryWithDeviceToken(params: DeviceTokenRetryDecision): bo
     Boolean(params.storedToken) &&
     params.canRetryWithDeviceTokenHint &&
     isTrustedRetryEndpoint(params.url)
+  );
+}
+
+export function normalizeRequestedOperatorScopes(
+  scopes: readonly string[] | null | undefined,
+): string[] | undefined {
+  if (!Array.isArray(scopes)) {
+    return undefined;
+  }
+  const normalized = [...new Set(scopes.map((entry) => entry.trim()).filter((entry) => CONTROL_UI_OPERATOR_SCOPE_SET.has(entry)))];
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+export function resolveRequestedOperatorScopesFromUrl(search?: string): string[] | undefined {
+  const rawSearch =
+    typeof search === "string" ? search : typeof window !== "undefined" ? window.location.search : "";
+  if (!rawSearch) {
+    return undefined;
+  }
+  const params = new URLSearchParams(rawSearch);
+  const rawValues = params.getAll("operatorScopes");
+  if (rawValues.length === 0) {
+    return undefined;
+  }
+  return normalizeRequestedOperatorScopes(
+    rawValues.flatMap((value) =>
+      value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    ),
   );
 }
 
@@ -380,7 +413,9 @@ export class GatewayBrowserClient {
 
   private async buildConnectPlan(): Promise<ConnectPlan> {
     const role = CONTROL_UI_OPERATOR_ROLE;
-    const scopes = [...CONTROL_UI_OPERATOR_SCOPES];
+    const scopes = normalizeRequestedOperatorScopes(this.opts.requestedScopes) ?? [
+      ...CONTROL_UI_OPERATOR_SCOPES,
+    ];
     const client = this.buildConnectClient();
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const explicitPassword = this.opts.password?.trim() || undefined;

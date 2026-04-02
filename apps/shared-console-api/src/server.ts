@@ -23,6 +23,7 @@ import {
   listSharedInstances,
   resolveSharedConsoleApiBashPath,
   resolveSharedConsoleDedicatedInstancesRoot,
+  updateSharedInstanceEnvValues,
   resolveSharedConsoleInstancesRoot,
   resolveSharedConsoleRepoRoot,
   updateSharedInstanceName,
@@ -30,6 +31,15 @@ import {
   type BuildSharedInstanceRecordOptions,
   type SharedInstanceRecord,
 } from "./instances.ts";
+import {
+  buildSharedConsoleModelChannelCatalog,
+  findSharedConsoleModelChannel,
+  normalizeSharedConsoleModelChannelSettings,
+  readSharedConsoleModelChannelSettings,
+  resolveSharedConsoleModelChannelsPath,
+  writeSharedConsoleInstanceModelConfig,
+  writeSharedConsoleModelChannelSettings,
+} from "./model-channels.ts";
 
 const DEFAULT_SHARED_CONSOLE_API_HOST = "127.0.0.1";
 const DEFAULT_SHARED_CONSOLE_API_PORT = 43100;
@@ -55,6 +65,7 @@ export type SharedConsoleApiConfig = {
   repoRoot: string;
   sharedInstancesRoot: string;
   dedicatedInstancesRoot: string;
+  modelChannelsPath: string;
   bashPath: string;
   probeTimeoutMs: number;
   adminToken: string | null;
@@ -119,12 +130,15 @@ export function resolveSharedConsoleApiConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): SharedConsoleApiConfig {
   const repoRoot = resolveSharedConsoleRepoRoot(import.meta.url);
+  const sharedInstancesRoot = resolveSharedConsoleInstancesRoot(env, repoRoot);
+  const dedicatedInstancesRoot = resolveSharedConsoleDedicatedInstancesRoot(env, repoRoot);
   return {
     host: env.SHARED_CONSOLE_API_HOST?.trim() || DEFAULT_SHARED_CONSOLE_API_HOST,
     port: parsePositiveInteger(env.SHARED_CONSOLE_API_PORT, DEFAULT_SHARED_CONSOLE_API_PORT),
     repoRoot,
-    sharedInstancesRoot: resolveSharedConsoleInstancesRoot(env, repoRoot),
-    dedicatedInstancesRoot: resolveSharedConsoleDedicatedInstancesRoot(env, repoRoot),
+    sharedInstancesRoot,
+    dedicatedInstancesRoot,
+    modelChannelsPath: resolveSharedConsoleModelChannelsPath(env, sharedInstancesRoot),
     bashPath: resolveSharedConsoleApiBashPath(env),
     probeTimeoutMs: parsePositiveInteger(
       env.SHARED_CONSOLE_API_PROBE_TIMEOUT_MS,
@@ -640,6 +654,16 @@ function requireAdminRequest(config: SharedConsoleApiConfig, req: IncomingMessag
   }
 }
 
+function isAdminRequest(config: SharedConsoleApiConfig, req: IncomingMessage): boolean {
+  const configuredToken = config.adminToken?.trim() || "";
+  const requestToken = readAdminTokenFromRequest(req);
+  return Boolean(
+    configuredToken &&
+      requestToken &&
+      isSecretEqual(configuredToken, requestToken),
+  );
+}
+
 function copyProxyRequestHeaders(
   headers: IncomingMessage["headers"],
   targetHost: string,
@@ -765,6 +789,92 @@ async function handleInstanceTokenRequest(
       id: instance.id,
       pool: route.pool,
       token,
+    },
+  });
+}
+
+async function applyInstanceModelChannel(
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+  pool: InstancePool,
+  id: string,
+  modelChannelId: string | null | undefined,
+): Promise<SharedInstanceRecord> {
+  const settings = await readSharedConsoleModelChannelSettings(config.modelChannelsPath);
+  const channel = findSharedConsoleModelChannel(settings, modelChannelId);
+  if (modelChannelId && !channel) {
+    throw new HttpError(400, `Model channel not found: ${modelChannelId}`);
+  }
+  await updateSharedInstanceEnvValues(resolveInstancesRoot(config, pool), id, {
+    INSTANCE_MODEL_CHANNEL_ID: channel?.id ?? null,
+  });
+  const instance = await ensureInstance(config, deps, pool, id, false);
+  await writeSharedConsoleInstanceModelConfig(instance, channel);
+  return await ensureInstance(config, deps, pool, id, false);
+}
+
+async function handleModelChannelsRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+): Promise<void> {
+  const method = (req.method ?? "GET").toUpperCase();
+  if (method === "GET") {
+    const settings = await readSharedConsoleModelChannelSettings(config.modelChannelsPath);
+    const admin = isAdminRequest(config, req);
+    sendJson(res, 200, {
+      ok: true,
+      admin,
+      catalog: buildSharedConsoleModelChannelCatalog(settings),
+      ...(admin ? { settings } : {}),
+    });
+    return;
+  }
+
+  if (method !== "PUT") {
+    throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
+  }
+
+  requireAdminRequest(config, req);
+  const body = await readJsonBody(req);
+  const nextSettings = normalizeSharedConsoleModelChannelSettings(body.settings ?? body);
+  const instances = await listAllCurrentInstances(config, deps);
+  const inUseIds = [...new Set(instances.map((item) => item.modelChannelId).filter(Boolean))];
+  const missingIds = inUseIds.filter((channelId) => !findSharedConsoleModelChannel(nextSettings, channelId));
+  if (missingIds.length > 0) {
+    throw new HttpError(
+      400,
+      `Cannot remove channels that are still assigned to instances: ${missingIds.join(", ")}`,
+    );
+  }
+
+  await writeSharedConsoleModelChannelSettings(config.modelChannelsPath, nextSettings);
+  const affectedInstances: Array<{ id: string; pool: InstancePool; restartRequired: boolean }> = [];
+  for (const item of instances) {
+    if (!item.modelChannelId) {
+      continue;
+    }
+    const channel = findSharedConsoleModelChannel(nextSettings, item.modelChannelId);
+    if (!channel) {
+      continue;
+    }
+    await writeSharedConsoleInstanceModelConfig(item, channel);
+    affectedInstances.push({
+      id: item.id,
+      pool: item.paths.root === config.dedicatedInstancesRoot ? "dedicated" : "shared",
+      restartRequired: item.process.state === "running",
+    });
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    admin: true,
+    catalog: buildSharedConsoleModelChannelCatalog(nextSettings),
+    settings: nextSettings,
+    meta: {
+      affectedInstances,
+      restartRequired: affectedInstances.filter((item) => item.restartRequired).map((item) => item.id),
     },
   });
 }
@@ -934,6 +1044,7 @@ async function handleCreateInstance(
     readOptionalString(body, "profile") ?? `${pool === "dedicated" ? "dedicated" : "shared"}-${id}`;
   const template = readOptionalString(body, "template");
   const bind = readOptionalString(body, "bind");
+  const modelChannelId = readOptionalString(body, "modelChannelId");
 
   const args = [id, "--root", resolveInstancesRoot(config, pool)];
   if (typeof port === "number") {
@@ -963,7 +1074,7 @@ async function handleCreateInstance(
     scriptName: "create-instance.sh",
     args,
   });
-  const instance = await ensureInstance(config, deps, pool, id, false);
+  const instance = await applyInstanceModelChannel(config, deps, pool, id, modelChannelId);
   sendJson(res, 201, {
     ok: true,
     pool,
@@ -986,19 +1097,40 @@ async function handlePatchInstance(
 ): Promise<void> {
   await ensureInstance(config, deps, pool, id, false);
   const body = await readJsonBody(req);
-  const allowedKeys = new Set(["name"]);
+  const allowedKeys = new Set(["name", "modelChannelId"]);
   const unsupportedKeys = Object.keys(body).filter((key) => !allowedKeys.has(key));
   if (unsupportedKeys.length > 0) {
     throw new HttpError(
       400,
-      `PATCH currently supports only: name. Unsupported keys: ${unsupportedKeys.join(", ")}`,
+      `PATCH currently supports only: name, modelChannelId. Unsupported keys: ${unsupportedKeys.join(", ")}`,
     );
   }
+  let didChange = false;
   const name = readOptionalString(body, "name");
-  if (!name) {
-    throw new HttpError(400, 'PATCH requires a non-empty "name".');
+  if ("name" in body) {
+    if (!name) {
+      throw new HttpError(400, 'PATCH requires a non-empty "name" when "name" is provided.');
+    }
+    await updateSharedInstanceName(resolveInstancesRoot(config, pool), id, name);
+    didChange = true;
   }
-  await updateSharedInstanceName(resolveInstancesRoot(config, pool), id, name);
+  if ("modelChannelId" in body) {
+    const rawChannelId = body.modelChannelId;
+    if (rawChannelId != null && typeof rawChannelId !== "string") {
+      throw new HttpError(400, '"modelChannelId" must be a string or null.');
+    }
+    await applyInstanceModelChannel(
+      config,
+      deps,
+      pool,
+      id,
+      typeof rawChannelId === "string" ? rawChannelId.trim() || null : null,
+    );
+    didChange = true;
+  }
+  if (!didChange) {
+    throw new HttpError(400, "PATCH requires at least one supported field.");
+  }
   const instance = await ensureInstance(config, deps, pool, id, false);
   sendJson(res, 200, {
     ok: true,
@@ -1215,6 +1347,11 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
 
         if (url.pathname === "/api/admin/validate") {
           await handleAdminValidate(req, res, config);
+          return;
+        }
+
+        if (url.pathname === "/api/model-channels") {
+          await handleModelChannelsRequest(req, res, config, deps);
           return;
         }
 

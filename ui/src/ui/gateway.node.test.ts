@@ -79,7 +79,13 @@ vi.mock("./device-identity.ts", () => ({
   signDevicePayload: signDevicePayloadMock,
 }));
 
-const { CONTROL_UI_OPERATOR_SCOPES, GatewayBrowserClient, shouldRetryWithDeviceToken } =
+const {
+  CONTROL_UI_OPERATOR_SCOPES,
+  GatewayBrowserClient,
+  normalizeRequestedOperatorScopes,
+  resolveRequestedOperatorScopesFromUrl,
+  shouldRetryWithDeviceToken,
+} =
   await import("./gateway.ts");
 
 type ConnectFrame = {
@@ -189,6 +195,18 @@ describe("GatewayBrowserClient", () => {
 
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+  });
+
+  it("uses requested scopes when explicitly provided", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      requestedScopes: ["operator.read", "operator.write"],
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.scopes).toEqual(["operator.read", "operator.write"]);
   });
 
   it("prefers explicit shared auth over cached device tokens", async () => {
@@ -481,5 +499,24 @@ describe("shouldRetryWithDeviceToken", () => {
         url: "ws://127.0.0.1:18789",
       }),
     ).toBe(false);
+  });
+});
+
+describe("requested operator scopes helpers", () => {
+  it("normalizes explicit operator scopes against the supported control-ui scope set", () => {
+    expect(
+      normalizeRequestedOperatorScopes([
+        "operator.read",
+        " operator.write ",
+        "operator.write",
+        "system.run",
+      ]),
+    ).toEqual(["operator.read", "operator.write"]);
+  });
+
+  it("reads requested scopes from the URL query string", () => {
+    expect(
+      resolveRequestedOperatorScopesFromUrl("?operatorScopes=operator.read,operator.write"),
+    ).toEqual(["operator.read", "operator.write"]);
   });
 });

@@ -30,6 +30,7 @@ import { loadHealthState } from "./controllers/health.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions, subscribeSessions } from "./controllers/sessions.ts";
 import {
+  resolveRequestedOperatorScopesFromUrl,
   resolveGatewayErrorDetailCode,
   type GatewayEventFrame,
   type GatewayHelloOk,
@@ -193,6 +194,7 @@ export function connectGateway(host: GatewayHost) {
     url: host.settings.gatewayUrl,
     token: host.settings.token.trim() ? host.settings.token : undefined,
     password: host.password.trim() ? host.password : undefined,
+    requestedScopes: resolveRequestedOperatorScopesFromUrl(),
     clientName: "openclaw-control-ui",
     clientVersion,
     mode: "webchat",

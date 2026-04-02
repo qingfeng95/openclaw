@@ -23,6 +23,12 @@ const state = {
   pairingInfo: null,
   pairingLoading: false,
   pairingError: "",
+  modelChannelCatalog: {
+    userCanConfigureModels: false,
+    channels: [],
+  },
+  modelChannelSettings: null,
+  modelChannelSettingsText: "",
   filter: "",
   busy: false,
   timerId: null,
@@ -65,6 +71,16 @@ const elements = {
   approveLatestPairingButton: document.querySelector("#approve-latest-pairing-button"),
   copyLoginGuideButton: document.querySelector("#copy-login-guide-button"),
   copyTokenButton: document.querySelector("#copy-token-button"),
+  modelChannelsPanel: document.querySelector("#model-channels-panel"),
+  modelChannelsForm: document.querySelector("#model-channels-form"),
+  modelChannelsTextarea: document.querySelector("#model-channels-textarea"),
+  userModelConfigCheckbox: document.querySelector("#user-model-config-checkbox"),
+  reloadModelChannelsButton: document.querySelector("#reload-model-channels-button"),
+  saveModelChannelsButton: document.querySelector("#save-model-channels-button"),
+  createModelChannelSelect: document.querySelector("#create-model-channel-select"),
+  detailModelChannelForm: document.querySelector("#detail-model-channel-form"),
+  detailModelChannelSelect: document.querySelector("#detail-model-channel-select"),
+  saveDetailModelChannelButton: document.querySelector("#save-detail-model-channel-button"),
   startButton: document.querySelector("#start-button"),
   stopButton: document.querySelector("#stop-button"),
   restartButton: document.querySelector("#restart-button"),
@@ -92,6 +108,48 @@ function resolveDefaultApiBase() {
 
 function resolveStoredAdminToken() {
   return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)?.trim() || "";
+}
+
+function defaultModelChannelSettings() {
+  return {
+    userCanConfigureModels: false,
+    channels: [],
+  };
+}
+
+function ensureModelChannelCatalogShape(payload) {
+  const channels = Array.isArray(payload?.channels) ? payload.channels : [];
+  return {
+    userCanConfigureModels: Boolean(payload?.userCanConfigureModels),
+    channels: channels
+      .map((item) => ({
+        id: String(item?.id || "").trim(),
+        name: String(item?.name || item?.id || "").trim(),
+        providerId: String(item?.providerId || "").trim(),
+        defaultModel: String(item?.defaultModel || "").trim(),
+      }))
+      .filter((item) => item.id),
+  };
+}
+
+function normalizeModelChannelSettingsForEditor(value) {
+  return {
+    userCanConfigureModels: Boolean(value?.userCanConfigureModels),
+    channels: Array.isArray(value?.channels) ? value.channels : [],
+  };
+}
+
+function formatModelChannelLabel(channelId) {
+  const normalized = String(channelId || "").trim();
+  if (!normalized) {
+    return "未映射";
+  }
+  const match = state.modelChannelCatalog.channels.find((item) => item.id === normalized);
+  if (!match) {
+    return `${normalized}（已不存在）`;
+  }
+  const suffix = match.defaultModel ? ` · ${match.defaultModel}` : "";
+  return `${match.name || match.id}${suffix}`;
 }
 
 function normalizeApiBase(value) {
@@ -515,13 +573,33 @@ function instanceUiProxyPath(scope, id) {
   return `${instanceApiBase(scope)}/${encodeURIComponent(id)}/ui/`;
 }
 
-function resolveInstanceUiUrl(scope, id) {
-  const proxyPath = instanceUiProxyPath(scope, id);
-  try {
-    return new URL(joinApiUrl(state.apiBase || "", proxyPath), window.location.origin).toString();
-  } catch {
-    return joinApiUrl(state.apiBase || "", proxyPath);
+function buildUiUrlWithOperatorScopes(baseUrl, scopes) {
+  if (!Array.isArray(scopes) || scopes.length === 0) {
+    return baseUrl;
   }
+  try {
+    const url = new URL(baseUrl);
+    url.searchParams.set("operatorScopes", scopes.join(","));
+    return url.toString();
+  } catch {
+    const separator = baseUrl.includes("?") ? "&" : "?";
+    return `${baseUrl}${separator}operatorScopes=${encodeURIComponent(scopes.join(","))}`;
+  }
+}
+
+function resolveUserInstanceUiScopes() {
+  return state.modelChannelCatalog.userCanConfigureModels ? [] : ["operator.read", "operator.write"];
+}
+
+function resolveInstanceUiUrl(scope, id, { userScoped = false } = {}) {
+  const proxyPath = instanceUiProxyPath(scope, id);
+  let resolved;
+  try {
+    resolved = new URL(joinApiUrl(state.apiBase || "", proxyPath), window.location.origin).toString();
+  } catch {
+    resolved = joinApiUrl(state.apiBase || "", proxyPath);
+  }
+  return userScoped ? buildUiUrlWithOperatorScopes(resolved, resolveUserInstanceUiScopes()) : resolved;
 }
 
 async function copyText(text, promptTitle) {
@@ -564,6 +642,39 @@ async function fetchJson(path, options = {}) {
     throw new Error(payload?.error?.message || `${response.status} ${response.statusText}`.trim());
   }
   return payload;
+}
+
+async function loadModelChannelConfig({ announce = false } = {}) {
+  const payload = await fetchJson("/api/model-channels", {
+    adminAuth: isAdminModeEnabled(),
+  });
+  state.modelChannelCatalog = ensureModelChannelCatalogShape(payload?.catalog);
+  if (payload?.admin && payload?.settings) {
+    state.modelChannelSettings = normalizeModelChannelSettingsForEditor(payload.settings);
+    state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
+  } else if (!isAdminModeEnabled()) {
+    state.modelChannelSettings = null;
+    state.modelChannelSettingsText = "";
+  }
+  if (announce) {
+    pushStatus(
+      "info",
+      "已加载模型渠道配置",
+      `${state.modelChannelCatalog.channels.length} 个渠道，用户自配模型：${state.modelChannelCatalog.userCanConfigureModels ? "开启" : "关闭"}`,
+    );
+  }
+}
+
+function buildModelChannelSettingsDraft() {
+  const raw = elements.modelChannelsTextarea?.value?.trim() || "{}";
+  const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("模型渠道配置必须是 JSON 对象。");
+  }
+  return {
+    ...parsed,
+    userCanConfigureModels: Boolean(elements.userModelConfigCheckbox?.checked),
+  };
 }
 
 function pushStatus(kind, title, detail = "") {
@@ -902,6 +1013,74 @@ function renderContainerNameOptions() {
   elements.containerNameOptions.innerHTML = names
     .map((name) => `<option value="${escapeHtml(name)}"></option>`)
     .join("");
+}
+
+function renderModelChannelSelect(select, selectedValue) {
+  if (!select) {
+    return;
+  }
+  const options = [
+    `<option value="">不映射全局渠道</option>`,
+    ...state.modelChannelCatalog.channels.map(
+      (channel) =>
+        `<option value="${escapeHtml(channel.id)}"${channel.id === selectedValue ? " selected" : ""}>${escapeHtml(
+          formatModelChannelLabel(channel.id),
+        )}</option>`,
+    ),
+  ];
+  if (
+    selectedValue &&
+    !state.modelChannelCatalog.channels.some((channel) => channel.id === selectedValue)
+  ) {
+    options.push(
+      `<option value="${escapeHtml(selectedValue)}" selected>${escapeHtml(
+        `${selectedValue}（已不存在）`,
+      )}</option>`,
+    );
+  }
+  select.innerHTML = options.join("");
+}
+
+function renderModelChannelSelects() {
+  renderModelChannelSelect(elements.createModelChannelSelect, "");
+  renderModelChannelSelect(elements.detailModelChannelSelect, state.selectedItem?.modelChannelId || "");
+}
+
+function renderModelChannelsPanel() {
+  if (
+    !elements.modelChannelsPanel ||
+    !elements.modelChannelsTextarea ||
+    !elements.userModelConfigCheckbox ||
+    !elements.reloadModelChannelsButton ||
+    !elements.saveModelChannelsButton
+  ) {
+    return;
+  }
+  const adminEnabled = isAdminModeEnabled();
+  const settings = state.modelChannelSettings || defaultModelChannelSettings();
+  elements.userModelConfigCheckbox.checked = Boolean(
+    state.modelChannelSettings?.userCanConfigureModels ?? state.modelChannelCatalog.userCanConfigureModels,
+  );
+  if (!elements.modelChannelsTextarea.value || adminEnabled) {
+    elements.modelChannelsTextarea.value =
+      state.modelChannelSettingsText || JSON.stringify(settings, null, 2);
+  }
+  elements.userModelConfigCheckbox.disabled = !adminEnabled;
+  elements.modelChannelsTextarea.disabled = !adminEnabled;
+  elements.reloadModelChannelsButton.disabled = !adminEnabled;
+  elements.saveModelChannelsButton.disabled = !adminEnabled;
+  if (!state.adminModeAvailable) {
+    elements.modelChannelsPanel.textContent = "当前服务端未启用管理员模式，无法管理全局模型渠道。";
+    return;
+  }
+  if (!adminEnabled) {
+    elements.modelChannelsPanel.textContent =
+      "进入管理员模式后，可统一维护多个模型渠道，并决定用户是否允许自己配置模型。";
+    return;
+  }
+  elements.modelChannelsPanel.textContent = `当前共 ${state.modelChannelCatalog.channels.length} 个渠道；用户自配模型：${
+    state.modelChannelCatalog.userCanConfigureModels ? "开启" : "关闭"
+  }。保存全局渠道后，已映射实例的配置文件会同步更新；运行中的实例需要重启后生效。`;
 }
 
 function syncCreateFormConstraints() {
@@ -1301,6 +1480,13 @@ function renderDetail() {
   elements.detailBadge.textContent = item.id;
   elements.detailTitle.textContent = item.name || item.id;
   elements.renameInput.value = item.name || "";
+  renderModelChannelSelect(elements.detailModelChannelSelect, item.modelChannelId || "");
+  if (elements.detailModelChannelSelect) {
+    elements.detailModelChannelSelect.disabled = false;
+  }
+  if (elements.saveDetailModelChannelButton) {
+    elements.saveDetailModelChannelButton.disabled = false;
+  }
   if (elements.openUiButton) {
     elements.openUiButton.disabled = !canOpenInstanceUi(item);
     elements.openUiButton.title =
@@ -1347,6 +1533,8 @@ function renderAll() {
   renderHotspots();
   renderContainers();
   renderContainerNameOptions();
+  renderModelChannelSelects();
+  renderModelChannelsPanel();
   renderContainerLogs();
   renderInstancesList();
   renderDedicatedInstancesList();
@@ -1379,7 +1567,7 @@ async function loadInstanceDetail(scope, id, announce = true) {
 async function loadInstances({ preserveSelection = true } = {}) {
   setBusy(true);
   try {
-    const [payload, dedicatedPayload, containersPayload] = await Promise.all([
+    const [payload, dedicatedPayload, containersPayload, modelChannelsPayload] = await Promise.all([
       fetchJson("/api/instances?includeProbe=1"),
       fetchJson("/api/dedicated-instances?includeProbe=1"),
       fetchJson("/api/containers").catch((error) => ({
@@ -1388,6 +1576,9 @@ async function loadInstances({ preserveSelection = true } = {}) {
         meta: null,
         error,
       })),
+      fetchJson("/api/model-channels", {
+        adminAuth: isAdminModeEnabled(),
+      }).catch(() => null),
     ]);
     state.sharedInstances = payload.items ?? [];
     state.dedicatedInstances = dedicatedPayload.items ?? [];
@@ -1399,6 +1590,16 @@ async function loadInstances({ preserveSelection = true } = {}) {
         [...state.sharedInstances, ...state.dedicatedInstances],
         containersPayload?.error?.message || "容器信息暂时不可用",
       );
+    if (modelChannelsPayload?.catalog) {
+      state.modelChannelCatalog = ensureModelChannelCatalogShape(modelChannelsPayload.catalog);
+      if (modelChannelsPayload?.admin && modelChannelsPayload?.settings) {
+        state.modelChannelSettings = normalizeModelChannelSettingsForEditor(modelChannelsPayload.settings);
+        state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
+      } else if (!isAdminModeEnabled()) {
+        state.modelChannelSettings = null;
+        state.modelChannelSettingsText = "";
+      }
+    }
     state.lastLoadedAt = new Date().toISOString();
 
     if (preserveSelection && state.selectedId) {
@@ -1517,7 +1718,7 @@ async function copySelectedInstanceUiLink() {
     pushStatus("error", "复制 UI 链接失败", "实例尚未运行，先启动实例再复制 UI 链接。");
     return;
   }
-  const url = resolveInstanceUiUrl(state.selectedScope, state.selectedId);
+  const url = resolveInstanceUiUrl(state.selectedScope, state.selectedId, { userScoped: true });
   const copied = await copyText(url, `复制 ${state.selectedId} UI 链接`);
   pushStatus(copied ? "success" : "info", `已复制 ${state.selectedId} UI 链接`, url);
 }
@@ -1535,6 +1736,11 @@ async function enableAdminMode() {
   await fetchJson("/api/admin/validate", { adminAuth: false, headers: { "X-Shared-Console-Admin-Token": token } });
   state.adminToken = token;
   sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+  try {
+    await loadModelChannelConfig({ announce: false });
+  } catch {
+    // Keep admin mode usable even if model-channel loading fails.
+  }
   if (state.selectedId) {
     try {
       await loadSelectedInstancePairing({ announce: false });
@@ -1552,8 +1758,11 @@ function clearAdminMode() {
   sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
   elements.adminTokenInput.value = "";
   resetPairingState();
+  state.modelChannelSettings = null;
+  state.modelChannelSettingsText = "";
   updateAdminModeUi();
   renderDetail();
+  renderModelChannelsPanel();
   pushStatus("info", "已退出管理员模式");
 }
 
@@ -1665,7 +1874,7 @@ async function copySelectedInstanceLoginGuide() {
   if (typeof token !== "string" || !token) {
     throw new Error("当前实例没有可复制的 Token。");
   }
-  const uiUrl = resolveInstanceUiUrl(state.selectedScope, state.selectedId);
+  const uiUrl = resolveInstanceUiUrl(state.selectedScope, state.selectedId, { userScoped: true });
   const guide = [
     `实例：${state.selectedItem.name || state.selectedId}`,
     `实例 ID：${state.selectedId}`,
@@ -2029,6 +2238,333 @@ async function loadRuntimeConfig() {
   }
 }
 
+loadModelChannelConfig = function ({ announce = false } = {}) {
+  return (async () => {
+    const payload = await fetchJson("/api/model-channels", {
+      adminAuth: isAdminModeEnabled(),
+    });
+    state.modelChannelCatalog = ensureModelChannelCatalogShape(payload?.catalog);
+    if (payload?.admin && payload?.settings) {
+      state.modelChannelSettings = normalizeModelChannelSettingsForEditor(payload.settings);
+      state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
+    } else if (!isAdminModeEnabled()) {
+      state.modelChannelSettings = null;
+      state.modelChannelSettingsText = "";
+    }
+    if (announce) {
+      pushStatus(
+        "info",
+        "Model channels loaded",
+        `${state.modelChannelCatalog.channels.length} channels, user model config ${
+          state.modelChannelCatalog.userCanConfigureModels ? "enabled" : "disabled"
+        }`,
+      );
+    }
+    return payload;
+  })();
+};
+
+buildModelChannelSettingsDraft = function () {
+  const raw = elements.modelChannelsTextarea?.value?.trim() || "{}";
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Invalid JSON: ${error.message}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Model channel settings must be a JSON object.");
+  }
+  return {
+    ...parsed,
+    userCanConfigureModels: Boolean(elements.userModelConfigCheckbox?.checked),
+  };
+};
+
+renderModelChannelsPanel = function () {
+  if (
+    !elements.modelChannelsPanel ||
+    !elements.modelChannelsTextarea ||
+    !elements.userModelConfigCheckbox ||
+    !elements.reloadModelChannelsButton ||
+    !elements.saveModelChannelsButton
+  ) {
+    return;
+  }
+
+  const adminEnabled = isAdminModeEnabled();
+  const settings = state.modelChannelSettings || defaultModelChannelSettings();
+  elements.userModelConfigCheckbox.checked = Boolean(
+    state.modelChannelSettings?.userCanConfigureModels ?? state.modelChannelCatalog.userCanConfigureModels,
+  );
+  if (!elements.modelChannelsTextarea.value || adminEnabled) {
+    elements.modelChannelsTextarea.value =
+      state.modelChannelSettingsText || JSON.stringify(settings, null, 2);
+  }
+  elements.userModelConfigCheckbox.disabled = !adminEnabled;
+  elements.modelChannelsTextarea.disabled = !adminEnabled;
+  elements.reloadModelChannelsButton.disabled = !adminEnabled;
+  elements.saveModelChannelsButton.disabled = !adminEnabled;
+
+  if (!state.adminModeAvailable) {
+    elements.modelChannelsPanel.textContent =
+      "Server admin mode is disabled, so global model-channel management is unavailable.";
+    return;
+  }
+  if (!adminEnabled) {
+    elements.modelChannelsPanel.textContent =
+      "Enter admin mode to maintain global model channels and choose whether users can configure models.";
+    return;
+  }
+  elements.modelChannelsPanel.textContent = `Global channels: ${state.modelChannelCatalog.channels.length}. User model config: ${
+    state.modelChannelCatalog.userCanConfigureModels ? "enabled" : "disabled"
+  }. Saving will rewrite mapped instance configs; running instances need restart to take effect.`;
+};
+
+renderMetaGrid = function (item) {
+  const entries = [
+    ["实例类型", instanceScopeLabel(state.selectedScope)],
+    ["实例 ID", item.id],
+    ["显示名称", item.name],
+    ["模型渠道", formatModelChannelLabel(item.modelChannelId || "")],
+    ["运行状态", item.process?.state === "running" ? "运行中" : "未运行"],
+    ["运行位置", instanceRuntimeLocation(item) === "container" ? "容器运行" : "宿主机运行"],
+    [
+      "所属容器",
+      instanceRuntimeLocation(item) === "container"
+        ? item.runtime?.containerName || "未写入容器名"
+        : "未绑定容器",
+    ],
+    ["进程 PID", item.process?.pid],
+    ["监听地址", item.bind],
+    ["端口", item.port],
+    ["Profile", item.profile],
+    ["模板", item.template],
+    ["配置文件", item.paths?.configPath],
+    ["运行目录", item.paths?.stateDir],
+    ["日志目录", item.paths?.logDir],
+    ["创建时间", formatDateTime(item.timestamps?.createdAt)],
+    ["更新时间", formatDateTime(item.timestamps?.updatedAt)],
+    ["当前版本", item.probe?.version],
+    ["运行说明", instanceRuntimeDescription(item)],
+  ];
+
+  elements.detailMeta.innerHTML = entries
+    .map(
+      ([label, value]) => `
+        <div class="meta-item">
+          <span class="meta-label">${escapeHtml(label)}</span>
+          <div class="meta-value"><code>${escapeHtml(formatMaybe(value))}</code></div>
+        </div>
+      `,
+    )
+    .join("");
+};
+
+renderDetail = function () {
+  const item = state.selectedItem;
+  const adminEnabled = isAdminModeEnabled();
+  if (!item) {
+    elements.detailBadge.textContent = "未选择实例";
+    elements.detailEmpty.classList.remove("hidden");
+    elements.detailContent.classList.add("hidden");
+    if (elements.openUiButton) {
+      elements.openUiButton.disabled = true;
+    }
+    if (elements.copyTokenButton) {
+      elements.copyTokenButton.classList.add("hidden");
+      elements.copyTokenButton.disabled = true;
+    }
+    if (elements.copyUiLinkButton) {
+      elements.copyUiLinkButton.disabled = true;
+    }
+    if (elements.copyLoginGuideButton) {
+      elements.copyLoginGuideButton.classList.add("hidden");
+      elements.copyLoginGuideButton.disabled = true;
+    }
+    if (elements.refreshPairingButton) {
+      elements.refreshPairingButton.classList.add("hidden");
+      elements.refreshPairingButton.disabled = true;
+    }
+    if (elements.approveLatestPairingButton) {
+      elements.approveLatestPairingButton.classList.add("hidden");
+      elements.approveLatestPairingButton.disabled = true;
+    }
+    if (elements.detailModelChannelSelect) {
+      elements.detailModelChannelSelect.disabled = true;
+    }
+    if (elements.saveDetailModelChannelButton) {
+      elements.saveDetailModelChannelButton.disabled = true;
+    }
+    renderPairingSummary();
+    updateAdminModeUi();
+    return;
+  }
+
+  elements.detailBadge.textContent = item.id;
+  elements.detailTitle.textContent = item.name || item.id;
+  elements.renameInput.value = item.name || "";
+  renderModelChannelSelect(elements.detailModelChannelSelect, item.modelChannelId || "");
+  if (elements.detailModelChannelSelect) {
+    elements.detailModelChannelSelect.disabled = !adminEnabled;
+  }
+  if (elements.saveDetailModelChannelButton) {
+    elements.saveDetailModelChannelButton.disabled = !adminEnabled;
+  }
+  if (elements.openUiButton) {
+    elements.openUiButton.disabled = !canOpenInstanceUi(item);
+  }
+  if (elements.copyUiLinkButton) {
+    elements.copyUiLinkButton.disabled = !canOpenInstanceUi(item);
+  }
+  if (elements.copyTokenButton) {
+    elements.copyTokenButton.disabled = !adminEnabled;
+    elements.copyTokenButton.classList.toggle("hidden", !adminEnabled);
+  }
+  if (elements.refreshPairingButton) {
+    elements.refreshPairingButton.disabled = !adminEnabled;
+    elements.refreshPairingButton.classList.toggle("hidden", !adminEnabled);
+  }
+  if (elements.approveLatestPairingButton) {
+    const pending = Array.isArray(state.pairingInfo?.pending) ? state.pairingInfo.pending : [];
+    elements.approveLatestPairingButton.disabled =
+      !adminEnabled || !canOpenInstanceUi(item) || state.pairingLoading || pending.length === 0;
+    elements.approveLatestPairingButton.classList.toggle("hidden", !adminEnabled);
+  }
+  if (elements.copyLoginGuideButton) {
+    elements.copyLoginGuideButton.disabled = !adminEnabled || !canOpenInstanceUi(item);
+    elements.copyLoginGuideButton.classList.toggle("hidden", !adminEnabled);
+  }
+  renderMetaGrid(item);
+  renderPairingSummary();
+  renderProbeGrid(item);
+  renderUsageSummary(item);
+  elements.detailEmpty.classList.add("hidden");
+  elements.detailContent.classList.remove("hidden");
+  updateAdminModeUi();
+};
+
+enableAdminMode = function () {
+  return (async () => {
+    if (!state.adminModeAvailable) {
+      pushStatus("error", "Admin mode unavailable", "Server admin mode is not enabled.");
+      return;
+    }
+    const token = elements.adminTokenInput.value.trim();
+    if (!token) {
+      pushStatus("error", "Admin mode unavailable", "Admin token is required.");
+      return;
+    }
+    await fetchJson("/api/admin/validate", {
+      adminAuth: false,
+      headers: { "X-Shared-Console-Admin-Token": token },
+    });
+    state.adminToken = token;
+    sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+    updateAdminModeUi();
+    await loadInstances({ preserveSelection: true });
+    pushStatus("success", "Admin mode enabled", "Global settings and instance tokens are now available.");
+  })();
+};
+
+clearAdminMode = function () {
+  state.adminToken = "";
+  sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+  elements.adminTokenInput.value = "";
+  resetPairingState();
+  state.modelChannelSettings = null;
+  state.modelChannelSettingsText = "";
+  updateAdminModeUi();
+  renderAll();
+  void loadInstances({ preserveSelection: true });
+  pushStatus("info", "Admin mode cleared");
+};
+
+function handleModelChannelsSubmit(event) {
+  return (async () => {
+    event.preventDefault();
+    if (!isAdminModeEnabled()) {
+      pushStatus("error", "Save failed", "Enter admin mode first.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const settings = buildModelChannelSettingsDraft();
+      const payload = await fetchJson("/api/model-channels", {
+        method: "PUT",
+        adminAuth: true,
+        body: JSON.stringify({ settings }),
+      });
+      state.modelChannelCatalog = ensureModelChannelCatalogShape(payload?.catalog);
+      state.modelChannelSettings = normalizeModelChannelSettingsForEditor(payload?.settings ?? settings);
+      state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
+      renderAll();
+      const restartRequired = Array.isArray(payload?.meta?.restartRequired) ? payload.meta.restartRequired : [];
+      pushStatus(
+        "success",
+        "Global model channels saved",
+        restartRequired.length > 0
+          ? `Restart required: ${restartRequired.join(", ")}`
+          : "No running mapped instance requires restart.",
+      );
+      await loadInstances({ preserveSelection: true });
+    } catch (error) {
+      pushStatus("error", "Global model channel save failed", error.message);
+      updateConnectionNote(`Save failed: ${error.message}`, true);
+    } finally {
+      setBusy(false);
+    }
+  })();
+}
+
+function handleDetailModelChannelSubmit(event) {
+  return (async () => {
+    event.preventDefault();
+    if (!state.selectedId) {
+      return;
+    }
+    if (!isAdminModeEnabled()) {
+      pushStatus("error", "Save failed", "Enter admin mode first.");
+      return;
+    }
+    const modelChannelId = elements.detailModelChannelSelect?.value?.trim() || null;
+    setBusy(true);
+    try {
+      await fetchJson(`${instanceApiBase(state.selectedScope)}/${encodeURIComponent(state.selectedId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ modelChannelId }),
+      });
+      pushStatus(
+        "success",
+        "Instance model channel updated",
+        `${state.selectedId} -> ${formatModelChannelLabel(modelChannelId || "")}`,
+      );
+      await loadInstances({ preserveSelection: true });
+    } catch (error) {
+      pushStatus("error", "Instance model channel update failed", error.message);
+      updateConnectionNote(`Save failed: ${error.message}`, true);
+    } finally {
+      setBusy(false);
+    }
+  })();
+}
+
+function bindModelChannelEvents() {
+  elements.modelChannelsForm?.addEventListener("submit", (event) => {
+    void handleModelChannelsSubmit(event);
+  });
+  elements.reloadModelChannelsButton?.addEventListener("click", () => {
+    void loadModelChannelConfig({ announce: true })
+      .then(() => renderAll())
+      .catch((error) => {
+        pushStatus("error", "Reload failed", error.message);
+      });
+  });
+  elements.detailModelChannelForm?.addEventListener("submit", (event) => {
+    void handleDetailModelChannelSubmit(event);
+  });
+}
+
 async function init() {
   await loadRuntimeConfig();
   await hydrateSelectionFromHash();
@@ -2040,6 +2576,7 @@ async function init() {
   elements.autoRefreshCheckbox.checked = localStorage.getItem(AUTO_REFRESH_STORAGE_KEY) === "1";
   elements.statusFeed.innerHTML = "";
   bindEvents();
+  bindModelChannelEvents();
   syncCreateFormConstraints();
   updateAdminModeUi();
   configureAutoRefresh(elements.autoRefreshCheckbox.checked);

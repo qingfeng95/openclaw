@@ -29,6 +29,7 @@ export type SharedInstanceProbe = {
 export type SharedInstanceRecord = {
   id: string;
   name: string;
+  modelChannelId: string | null;
   bind: string | null;
   port: number | null;
   profile: string | null;
@@ -332,6 +333,7 @@ export async function buildSharedInstanceRecord(
   const record: SharedInstanceRecord = {
     id: normalizeNullableString(envRecord.INSTANCE_ID) ?? path.basename(instanceDir),
     name: normalizeNullableString(envRecord.INSTANCE_NAME) ?? path.basename(instanceDir),
+    modelChannelId: normalizeNullableString(envRecord.INSTANCE_MODEL_CHANNEL_ID),
     bind: normalizeNullableString(envRecord.INSTANCE_BIND),
     port: normalizeNullableNumber(envRecord.INSTANCE_PORT),
     profile: normalizeNullableString(envRecord.INSTANCE_PROFILE),
@@ -402,15 +404,36 @@ function escapeDoubleQuotedEnvValue(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-export async function updateSharedInstanceName(root: string, id: string, name: string): Promise<void> {
+export async function updateSharedInstanceEnvValues(
+  root: string,
+  id: string,
+  updates: Record<string, string | null | undefined>,
+): Promise<void> {
   if (!validateSharedInstanceId(id)) {
     throw new Error(`Invalid instance id: ${id}`);
   }
   const instanceEnvPath = path.join(root, id, "instance.env");
   const content = await fs.readFile(instanceEnvPath, "utf8");
-  const nextLine = `INSTANCE_NAME="${escapeDoubleQuotedEnvValue(name)}"`;
-  const nextContent = /^INSTANCE_NAME=.*$/m.test(content)
-    ? content.replace(/^INSTANCE_NAME=.*$/m, nextLine)
-    : `${content.trimEnd()}\n${nextLine}\n`;
+  let nextContent = content;
+  for (const [key, rawValue] of Object.entries(updates)) {
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`^${escapedKey}=.*$`, "m");
+    if (rawValue == null || rawValue === "") {
+      nextContent = pattern.test(nextContent)
+        ? nextContent.replace(new RegExp(`^${escapedKey}=.*(?:\\r?\\n)?`, "m"), "")
+        : nextContent;
+      continue;
+    }
+    const nextLine = `${key}="${escapeDoubleQuotedEnvValue(rawValue)}"`;
+    nextContent = pattern.test(nextContent)
+      ? nextContent.replace(pattern, nextLine)
+      : `${nextContent.trimEnd()}\n${nextLine}\n`;
+  }
   await fs.writeFile(instanceEnvPath, nextContent, "utf8");
+}
+
+export async function updateSharedInstanceName(root: string, id: string, name: string): Promise<void> {
+  await updateSharedInstanceEnvValues(root, id, {
+    INSTANCE_NAME: name,
+  });
 }

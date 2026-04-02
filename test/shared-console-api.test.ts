@@ -24,6 +24,7 @@ async function writeInstance(
   params: {
     id: string;
     name?: string;
+    modelChannelId?: string;
     port?: number;
     profile?: string;
     bind?: string;
@@ -48,6 +49,7 @@ async function writeInstance(
     [
       `INSTANCE_ID="${params.id}"`,
       `INSTANCE_NAME="${params.name ?? params.id}"`,
+      ...(params.modelChannelId ? [`INSTANCE_MODEL_CHANNEL_ID="${params.modelChannelId}"`] : []),
       `INSTANCE_DIR="${instanceDir}"`,
       `INSTANCE_ROOT="${root}"`,
       `INSTANCE_RUNTIME_KIND="${params.runtimeKind ?? "host"}"`,
@@ -74,6 +76,7 @@ async function writeInstance(
 async function startTestServer(params: {
   root: string;
   repoRoot?: string;
+  modelChannelsPath?: string;
   runOpsCommand?: (invocation: OpsCommandInvocation) => Promise<OpsCommandResult>;
   runDockerCommand?: (invocation: { args: string[] }) => Promise<{
     exitCode: number;
@@ -101,6 +104,7 @@ async function startTestServer(params: {
       repoRoot: params.repoRoot ?? params.root,
       sharedInstancesRoot: params.root,
       dedicatedInstancesRoot: path.join(params.root, ".dedicated"),
+      ...(params.modelChannelsPath ? { modelChannelsPath: params.modelChannelsPath } : {}),
       adminToken: params.adminToken ?? null,
     },
     runOpsCommand: params.runOpsCommand,
@@ -198,6 +202,7 @@ describe("shared console api", () => {
             {
               id: "alpha",
               name: "Alpha",
+              modelChannelId: null,
               bind: "loopback",
               port: 19111,
               profile: "shared-alpha",
@@ -232,6 +237,181 @@ describe("shared console api", () => {
             instancesRoot: root,
             includeProbe: false,
           },
+        });
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("lists public channel catalog and exposes full settings only to admin requests", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const modelChannelsPath = path.join(root, "model-channels.json");
+      await fs.writeFile(
+        modelChannelsPath,
+        JSON.stringify(
+          {
+            userCanConfigureModels: false,
+            channels: [
+              {
+                id: "openai-main",
+                name: "OpenAI Main",
+                providerId: "openai-main",
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "sk-secret",
+                api: "openai-responses",
+                models: [
+                  {
+                    id: "gpt-5-mini",
+                    name: "GPT-5 mini",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 128000,
+                    maxTokens: 16000,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+                defaultModel: "openai-main/gpt-5-mini",
+              },
+            ],
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        modelChannelsPath,
+        adminToken: "console-admin-secret",
+      });
+
+      try {
+        const publicResponse = await fetch(`${baseUrl}/api/model-channels`);
+        expect(publicResponse.status).toBe(200);
+        expect(await publicResponse.json()).toEqual({
+          ok: true,
+          admin: false,
+          catalog: {
+            userCanConfigureModels: false,
+            channels: [
+              {
+                id: "openai-main",
+                name: "OpenAI Main",
+                providerId: "openai-main",
+                defaultModel: "openai-main/gpt-5-mini",
+              },
+            ],
+          },
+        });
+
+        const adminResponse = await fetch(`${baseUrl}/api/model-channels`, {
+          headers: {
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+        });
+        expect(adminResponse.status).toBe(200);
+        const adminPayload = await adminResponse.json();
+        expect(adminPayload.ok).toBe(true);
+        expect(adminPayload.admin).toBe(true);
+        expect(adminPayload.catalog.channels).toHaveLength(1);
+        expect(adminPayload.settings.channels[0].apiKey).toBe("sk-secret");
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("creates instances with a mapped model channel and writes the resolved config", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const modelChannelsPath = path.join(root, "model-channels.json");
+      await fs.writeFile(
+        modelChannelsPath,
+        JSON.stringify(
+          {
+            userCanConfigureModels: false,
+            channels: [
+              {
+                id: "openai-main",
+                name: "OpenAI Main",
+                providerId: "openai-main",
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "sk-secret",
+                api: "openai-responses",
+                models: [
+                  {
+                    id: "gpt-5-mini",
+                    name: "GPT-5 mini",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 128000,
+                    maxTokens: 16000,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+                defaultModel: "openai-main/gpt-5-mini",
+              },
+            ],
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const invocations: OpsCommandInvocation[] = [];
+      const { server, baseUrl } = await startTestServer({
+        root,
+        modelChannelsPath,
+        runOpsCommand: async (invocation) => {
+          invocations.push(invocation);
+          if (invocation.scriptName === "create-instance.sh") {
+            await writeInstance(root, {
+              id: "modelled",
+              name: "Modelled",
+              port: 19119,
+            });
+          }
+          return {
+            exitCode: 0,
+            stdout: "ok",
+            stderr: "",
+          };
+        },
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/instances`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            id: "modelled",
+            name: "Modelled",
+            modelChannelId: "openai-main",
+          }),
+        });
+
+        expect(response.status).toBe(201);
+        const payload = await response.json();
+        expect(payload.item.modelChannelId).toBe("openai-main");
+        expect(invocations[0]?.scriptName).toBe("create-instance.sh");
+
+        const envFile = await fs.readFile(path.join(root, "modelled", "instance.env"), "utf8");
+        expect(envFile).toContain('INSTANCE_MODEL_CHANNEL_ID="openai-main"');
+
+        const configFile = JSON.parse(
+          await fs.readFile(path.join(root, "modelled", "config", "openclaw.instance.json5"), "utf8"),
+        );
+        expect(configFile.models.providers["openai-main"]).toMatchObject({
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "sk-secret",
+          api: "openai-responses",
+        });
+        expect(configFile.agents.defaults).toMatchObject({
+          model: "openai-main/gpt-5-mini",
         });
       } finally {
         await stopServer(server);

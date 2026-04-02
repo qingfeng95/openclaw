@@ -110,6 +110,37 @@
         </div>
       </section>
 
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">模型渠道</p>
+            <h2>全局模型渠道与用户模型权限</h2>
+          </div>
+        </div>
+        <div id="model-channels-panel" class="callout">
+          进入管理员模式后，可在这里统一维护模型渠道 JSON；实例只做渠道映射，不再让用户自己配 provider / model。
+        </div>
+        <form id="model-channels-form" class="form-grid">
+          <label class="toggle" style="grid-column: 1 / -1;">
+            <input id="user-model-config-checkbox" type="checkbox" />
+            <span>允许用户自己配置模型与渠道</span>
+          </label>
+          <label class="field" style="grid-column: 1 / -1;">
+            <span>模型渠道 JSON</span>
+            <textarea
+              id="model-channels-textarea"
+              rows="18"
+              spellcheck="false"
+              placeholder='{"userCanConfigureModels":false,"channels":[]}'
+            ></textarea>
+          </label>
+          <div class="inline-actions">
+            <button id="reload-model-channels-button" class="button" type="button">重新加载</button>
+            <button id="save-model-channels-button" class="button button-primary" type="submit">保存全局渠道</button>
+          </div>
+        </form>
+      </section>
+
       <main class="main-grid">
         <section class="panel panel-list">
           <div class="panel-header">
@@ -155,6 +186,23 @@
                 </div>
               </div>
               <div id="detail-meta" class="meta-grid"></div>
+            </section>
+
+            <section class="detail-card">
+              <div class="detail-card-header">
+                <h3>模型渠道映射</h3>
+              </div>
+              <form id="detail-model-channel-form" class="form-grid">
+                <label class="field">
+                  <span>当前渠道</span>
+                  <select id="detail-model-channel-select" name="modelChannelId"></select>
+                </label>
+                <div class="inline-actions">
+                  <button id="save-detail-model-channel-button" class="button button-primary" type="submit">
+                    保存渠道映射
+                  </button>
+                </div>
+              </form>
             </section>
 
             <section class="detail-card">
@@ -239,6 +287,10 @@
             <label class="field">
               <span>实例模板</span>
               <input name="template" type="text" placeholder="shared-instance.internal-test.yaml" />
+            </label>
+            <label class="field">
+              <span>模型渠道</span>
+              <select id="create-model-channel-select" name="modelChannelId"></select>
             </label>
             <label class="field">
               <span>监听地址</span>

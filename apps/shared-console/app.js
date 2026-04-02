@@ -78,6 +78,48 @@ function normalizeApiBase(value) {
   return value.trim().replace(/\/+$/, "");
 }
 
+function isAbsoluteHttpUrl(value) {
+  return /^https?:\/\//i.test(value);
+}
+
+function normalizeApiPath(path) {
+  if (!path) {
+    return "/";
+  }
+  return path.startsWith("/") ? path : `/${path}`;
+}
+
+function joinApiUrl(base, path) {
+  const normalizedPath = normalizeApiPath(path);
+  const normalizedBase = normalizeApiBase(base ?? "");
+  if (!normalizedBase) {
+    return normalizedPath;
+  }
+  if (isAbsoluteHttpUrl(normalizedBase)) {
+    try {
+      const url = new URL(normalizedBase);
+      const basePath = normalizeApiPath(url.pathname).replace(/\/+$/, "") || "/";
+      if (normalizedPath === basePath || normalizedPath.startsWith(`${basePath}/`)) {
+        return `${url.origin}${normalizedPath}`;
+      }
+      if (basePath === "/api" && normalizedPath.startsWith("/api/")) {
+        return `${url.origin}${normalizedPath}`;
+      }
+    } catch {
+      // Fall back to direct concatenation below when URL parsing fails.
+    }
+    return `${normalizedBase}${normalizedPath}`;
+  }
+  const basePath = normalizedBase.startsWith("/") ? normalizedBase : `/${normalizedBase}`;
+  if (normalizedPath === basePath || normalizedPath.startsWith(`${basePath}/`)) {
+    return normalizedPath;
+  }
+  if (basePath === "/api" && normalizedPath.startsWith("/api/")) {
+    return normalizedPath;
+  }
+  return `${basePath}${normalizedPath}`;
+}
+
 function setBusy(nextBusy) {
   state.busy = nextBusy;
   for (const button of document.querySelectorAll("button")) {
@@ -409,9 +451,9 @@ function instanceUiProxyPath(scope, id) {
 function resolveInstanceUiUrl(scope, id) {
   const proxyPath = instanceUiProxyPath(scope, id);
   try {
-    return new URL(proxyPath, state.apiBase || window.location.origin).toString();
+    return new URL(joinApiUrl(state.apiBase || "", proxyPath), window.location.origin).toString();
   } catch {
-    return proxyPath;
+    return joinApiUrl(state.apiBase || "", proxyPath);
   }
 }
 
@@ -420,7 +462,7 @@ function canOpenInstanceUi(item) {
 }
 
 async function fetchJson(path, options = {}) {
-  const response = await fetch(`${state.apiBase}${path}`, {
+  const response = await fetch(joinApiUrl(state.apiBase, path), {
     headers: {
       "Content-Type": "application/json",
       ...(options.headers ?? {}),

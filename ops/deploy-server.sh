@@ -104,7 +104,7 @@ if [ "$SKIP_PULL" -ne 1 ]; then
   if [ "$ALLOW_DIRTY" -eq 1 ]; then
     pull_args+=(--allow-dirty)
   fi
-  "$SCRIPT_DIR/deploy-pull.sh" "${pull_args[@]}"
+  bash "$SCRIPT_DIR/deploy-pull.sh" "${pull_args[@]}"
 fi
 
 build_args=(--repo-root "$REPO_ROOT")
@@ -117,14 +117,14 @@ fi
 if [ "$SKIP_WEB_BUILD" -eq 1 ]; then
   build_args+=(--skip-web-build)
 fi
-"$SCRIPT_DIR/deploy-build.sh" "${build_args[@]}"
+bash "$SCRIPT_DIR/deploy-build.sh" "${build_args[@]}"
 
 if [ "$SKIP_ROLLOUT" -ne 1 ]; then
   rollout_args=(--target "$TARGET")
   if [ "$SKIP_CHECK" -eq 1 ]; then
     rollout_args+=(--skip-check)
   fi
-  "$SCRIPT_DIR/deploy-rollout.sh" "${rollout_args[@]}"
+  bash "$SCRIPT_DIR/deploy-rollout.sh" "${rollout_args[@]}"
 fi
 
 shared_deploy_log "server deployment completed"

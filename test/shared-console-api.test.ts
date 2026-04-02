@@ -967,6 +967,147 @@ describe("shared console api", () => {
     });
   });
 
+  it("lists and approves instance device pairing entries only for authorized admin requests", async () => {
+    await withTempInstancesRoot(async (root) => {
+      await writeInstance(root, {
+        id: "pairing-alpha",
+      });
+
+      const invocations: OpsCommandInvocation[] = [];
+      const { server, baseUrl } = await startTestServer({
+        root,
+        adminToken: "console-admin-secret",
+        runOpsCommand: async (invocation) => {
+          invocations.push(invocation);
+          if (invocation.scriptName !== "pairing-instance.sh") {
+            return {
+              exitCode: 1,
+              stdout: "",
+              stderr: `unexpected script ${invocation.scriptName}`,
+            };
+          }
+          if (invocation.args[0] === "list") {
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({
+                pending: [
+                  {
+                    requestId: "req-1",
+                    deviceId: "dev-1",
+                    displayName: "Chrome",
+                    role: "operator",
+                    scopes: ["operator.read"],
+                  },
+                ],
+                paired: [],
+              }),
+              stderr: "",
+            };
+          }
+          if (invocation.args[0] === "approve-latest") {
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({
+                requestId: "req-1",
+                device: {
+                  deviceId: "dev-1",
+                },
+              }),
+              stderr: "",
+            };
+          }
+          return {
+            exitCode: 1,
+            stdout: "",
+            stderr: `unexpected args ${invocation.args.join(" ")}`,
+          };
+        },
+      });
+
+      try {
+        const forbidden = await fetch(`${baseUrl}/api/instances/pairing-alpha/pairing`);
+        expect(forbidden.status).toBe(403);
+
+        const listResponse = await fetch(`${baseUrl}/api/instances/pairing-alpha/pairing`, {
+          headers: {
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+        });
+        expect(listResponse.status).toBe(200);
+        expect(await listResponse.json()).toEqual({
+          ok: true,
+          item: {
+            id: "pairing-alpha",
+            pool: "shared",
+            pairing: {
+              pending: [
+                {
+                  requestId: "req-1",
+                  deviceId: "dev-1",
+                  displayName: "Chrome",
+                  role: "operator",
+                  scopes: ["operator.read"],
+                },
+              ],
+              paired: [],
+            },
+          },
+        });
+
+        const approveResponse = await fetch(`${baseUrl}/api/instances/pairing-alpha/pairing/approve-latest`, {
+          method: "POST",
+          headers: {
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+        });
+        expect(approveResponse.status).toBe(200);
+        expect(await approveResponse.json()).toEqual({
+          ok: true,
+          action: "approve-latest",
+          item: {
+            id: "pairing-alpha",
+            pool: "shared",
+            pairing: {
+              pending: [
+                {
+                  requestId: "req-1",
+                  deviceId: "dev-1",
+                  displayName: "Chrome",
+                  role: "operator",
+                  scopes: ["operator.read"],
+                },
+              ],
+              paired: [],
+            },
+          },
+          result: {
+            requestId: "req-1",
+            device: {
+              deviceId: "dev-1",
+            },
+          },
+        });
+
+        expect(invocations).toEqual([
+          {
+            scriptName: "pairing-instance.sh",
+            args: ["list", "pairing-alpha", "--root", root],
+          },
+          {
+            scriptName: "pairing-instance.sh",
+            args: ["approve-latest", "pairing-alpha", "--root", root],
+          },
+          {
+            scriptName: "pairing-instance.sh",
+            args: ["list", "pairing-alpha", "--root", root],
+          },
+        ]);
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
   it("lists relevant containers and attached instances", async () => {
     await withTempInstancesRoot(async (root) => {
       await writeInstance(root, {

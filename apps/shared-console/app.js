@@ -20,6 +20,9 @@ const state = {
   selectedScope: "shared",
   selectedId: null,
   selectedItem: null,
+  pairingInfo: null,
+  pairingLoading: false,
+  pairingError: "",
   filter: "",
   busy: false,
   timerId: null,
@@ -58,12 +61,15 @@ const elements = {
   renameInput: document.querySelector("#rename-input"),
   openUiButton: document.querySelector("#open-ui-button"),
   copyUiLinkButton: document.querySelector("#copy-ui-link-button"),
+  refreshPairingButton: document.querySelector("#refresh-pairing-button"),
+  approveLatestPairingButton: document.querySelector("#approve-latest-pairing-button"),
   copyLoginGuideButton: document.querySelector("#copy-login-guide-button"),
   copyTokenButton: document.querySelector("#copy-token-button"),
   startButton: document.querySelector("#start-button"),
   stopButton: document.querySelector("#stop-button"),
   restartButton: document.querySelector("#restart-button"),
   probeGrid: document.querySelector("#probe-grid"),
+  pairingSummary: document.querySelector("#pairing-summary"),
   usageSummary: document.querySelector("#usage-summary"),
   createForm: document.querySelector("#create-form"),
   statusFeed: document.querySelector("#status-feed"),
@@ -153,6 +159,12 @@ function updateAdminModeUi() {
     if (elements.copyLoginGuideButton) {
       elements.copyLoginGuideButton.classList.add("hidden");
     }
+    if (elements.refreshPairingButton) {
+      elements.refreshPairingButton.classList.add("hidden");
+    }
+    if (elements.approveLatestPairingButton) {
+      elements.approveLatestPairingButton.classList.add("hidden");
+    }
     return;
   }
   elements.adminTokenInput.disabled = false;
@@ -166,6 +178,12 @@ function updateAdminModeUi() {
   }
   if (elements.copyLoginGuideButton) {
     elements.copyLoginGuideButton.classList.toggle("hidden", !isAdminModeEnabled() || !state.selectedItem);
+  }
+  if (elements.refreshPairingButton) {
+    elements.refreshPairingButton.classList.toggle("hidden", !isAdminModeEnabled() || !state.selectedItem);
+  }
+  if (elements.approveLatestPairingButton) {
+    elements.approveLatestPairingButton.classList.toggle("hidden", !isAdminModeEnabled() || !state.selectedItem);
   }
 }
 
@@ -517,6 +535,12 @@ async function copyText(text, promptTitle) {
 
 function canOpenInstanceUi(item) {
   return Boolean(item?.port) && item?.process?.state === "running";
+}
+
+function resetPairingState() {
+  state.pairingInfo = null;
+  state.pairingLoading = false;
+  state.pairingError = "";
 }
 
 async function fetchJson(path, options = {}) {
@@ -1164,6 +1188,83 @@ function renderUsageSummary(item) {
   `;
 }
 
+function renderPairingSummary() {
+  if (!elements.pairingSummary) {
+    return;
+  }
+  if (!state.selectedItem) {
+    elements.pairingSummary.innerHTML = `<p class="connection-note">选择实例后可查看设备配对状态。</p>`;
+    return;
+  }
+  if (!state.adminModeAvailable) {
+    elements.pairingSummary.innerHTML = `<p class="connection-note">当前服务器未启用管理员模式，无法查看设备配对。</p>`;
+    return;
+  }
+  if (!isAdminModeEnabled()) {
+    elements.pairingSummary.innerHTML =
+      `<p class="connection-note">进入管理员模式后，可查看待配对设备并一键批准最新请求。</p>`;
+    return;
+  }
+  if (state.pairingLoading) {
+    elements.pairingSummary.innerHTML = `<p class="connection-note">正在加载该实例的设备配对状态...</p>`;
+    return;
+  }
+  if (state.pairingError) {
+    elements.pairingSummary.innerHTML = `<p class="connection-note">${escapeHtml(state.pairingError)}</p>`;
+    return;
+  }
+
+  const pairing = state.pairingInfo || {};
+  const pending = Array.isArray(pairing.pending) ? pairing.pending : [];
+  const paired = Array.isArray(pairing.paired) ? pairing.paired : [];
+  const latestPending =
+    pending.length > 0
+      ? [...pending].sort((left, right) => Number(right?.ts ?? 0) - Number(left?.ts ?? 0))[0]
+      : null;
+
+  const pendingMarkup =
+    pending.length > 0
+      ? pending
+          .slice(0, 5)
+          .map((entry) => {
+            const name = entry.displayName || entry.deviceId || "未命名设备";
+            const requestId = entry.requestId || "unknown";
+            const role = entry.role || (Array.isArray(entry.roles) ? entry.roles.join(", ") : "") || "unknown";
+            const scopes = Array.isArray(entry.scopes) && entry.scopes.length > 0 ? entry.scopes.join(", ") : "未声明";
+            return `<article class="callout"><strong>${escapeHtml(name)}</strong><br />请求 ID：<code>${escapeHtml(requestId)}</code><br />角色：${escapeHtml(role)}<br />范围：${escapeHtml(scopes)}</article>`;
+          })
+          .join("")
+      : `<p class="connection-note">当前没有待批准的设备配对请求。</p>`;
+
+  const pairedMarkup =
+    paired.length > 0
+      ? `<p class="connection-note">已配对设备 ${escapeHtml(paired.length)} 台。${
+          paired[0]?.displayName || paired[0]?.deviceId
+            ? `最近设备：<code>${escapeHtml(paired[0].displayName || paired[0].deviceId)}</code>`
+            : ""
+        }</p>`
+      : `<p class="connection-note">当前还没有已配对设备。</p>`;
+
+  elements.pairingSummary.innerHTML = `
+    <section class="detail-card" style="grid-column: 1 / -1;">
+      <div class="detail-card-header">
+        <h3>配对总览</h3>
+        <div class="inline-actions">
+          <span class="chip ${pending.length > 0 ? "chip-danger" : "chip-success"}">待批准 ${escapeHtml(pending.length)}</span>
+          <span class="chip ${paired.length > 0 ? "chip-success" : ""}">已配对 ${escapeHtml(paired.length)}</span>
+        </div>
+      </div>
+      ${
+        latestPending
+          ? `<p class="connection-note">最新请求：<code>${escapeHtml(latestPending.requestId || "unknown")}</code> / ${escapeHtml(latestPending.displayName || latestPending.deviceId || "未命名设备")}</p>`
+          : `<p class="connection-note">当前没有新的待批准配对。</p>`
+      }
+      ${pendingMarkup}
+      ${pairedMarkup}
+    </section>
+  `;
+}
+
 function renderDetail() {
   const item = state.selectedItem;
   if (!item) {
@@ -1184,6 +1285,15 @@ function renderDetail() {
       elements.copyLoginGuideButton.classList.add("hidden");
       elements.copyLoginGuideButton.disabled = true;
     }
+    if (elements.refreshPairingButton) {
+      elements.refreshPairingButton.classList.add("hidden");
+      elements.refreshPairingButton.disabled = true;
+    }
+    if (elements.approveLatestPairingButton) {
+      elements.approveLatestPairingButton.classList.add("hidden");
+      elements.approveLatestPairingButton.disabled = true;
+    }
+    renderPairingSummary();
     updateAdminModeUi();
     return;
   }
@@ -1209,11 +1319,21 @@ function renderDetail() {
     elements.copyTokenButton.disabled = !isAdminModeEnabled();
     elements.copyTokenButton.classList.toggle("hidden", !isAdminModeEnabled());
   }
+  if (elements.refreshPairingButton) {
+    elements.refreshPairingButton.disabled = !isAdminModeEnabled();
+    elements.refreshPairingButton.classList.toggle("hidden", !isAdminModeEnabled());
+  }
+  if (elements.approveLatestPairingButton) {
+    const pending = Array.isArray(state.pairingInfo?.pending) ? state.pairingInfo.pending : [];
+    elements.approveLatestPairingButton.disabled = !isAdminModeEnabled() || !canOpenInstanceUi(item) || state.pairingLoading || pending.length === 0;
+    elements.approveLatestPairingButton.classList.toggle("hidden", !isAdminModeEnabled());
+  }
   if (elements.copyLoginGuideButton) {
     elements.copyLoginGuideButton.disabled = !isAdminModeEnabled() || !canOpenInstanceUi(item);
     elements.copyLoginGuideButton.classList.toggle("hidden", !isAdminModeEnabled());
   }
   renderMetaGrid(item);
+  renderPairingSummary();
   renderProbeGrid(item);
   renderUsageSummary(item);
   elements.detailEmpty.classList.add("hidden");
@@ -1243,6 +1363,14 @@ async function loadInstanceDetail(scope, id, announce = true) {
   state.selectedScope = scope;
   state.selectedId = id;
   state.selectedItem = payload.item;
+  resetPairingState();
+  if (isAdminModeEnabled()) {
+    try {
+      await loadSelectedInstancePairing({ announce: false });
+    } catch {
+      // Keep instance detail usable even if pairing diagnostics fail.
+    }
+  }
   if (announce) {
     pushStatus("info", `已切换到${instanceScopeLabel(scope)} ${id}`, payload.item?.probe?.version || "暂无版本信息");
   }
@@ -1407,6 +1535,13 @@ async function enableAdminMode() {
   await fetchJson("/api/admin/validate", { adminAuth: false, headers: { "X-Shared-Console-Admin-Token": token } });
   state.adminToken = token;
   sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+  if (state.selectedId) {
+    try {
+      await loadSelectedInstancePairing({ announce: false });
+    } catch {
+      // Admin mode itself is still valid even if the current instance pairing probe fails.
+    }
+  }
   updateAdminModeUi();
   renderDetail();
   pushStatus("success", "管理员模式已启用", "现在可以复制当前实例 Token。");
@@ -1416,9 +1551,80 @@ function clearAdminMode() {
   state.adminToken = "";
   sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
   elements.adminTokenInput.value = "";
+  resetPairingState();
   updateAdminModeUi();
   renderDetail();
   pushStatus("info", "已退出管理员模式");
+}
+
+async function loadSelectedInstancePairing({ announce = true } = {}) {
+  if (!state.selectedItem || !state.selectedId) {
+    resetPairingState();
+    renderPairingSummary();
+    return;
+  }
+  if (!isAdminModeEnabled()) {
+    resetPairingState();
+    renderPairingSummary();
+    return;
+  }
+  state.pairingLoading = true;
+  state.pairingError = "";
+  renderPairingSummary();
+  try {
+    const payload = await fetchJson(`${instanceApiBase(state.selectedScope)}/${encodeURIComponent(state.selectedId)}/pairing`, {
+      adminAuth: true,
+    });
+    state.pairingInfo = payload?.item?.pairing ?? { pending: [], paired: [] };
+    state.pairingError = "";
+    if (announce) {
+      const pendingCount = Array.isArray(state.pairingInfo?.pending) ? state.pairingInfo.pending.length : 0;
+      pushStatus("info", `已刷新 ${state.selectedId} 配对状态`, `待批准 ${pendingCount}`);
+    }
+  } catch (error) {
+    state.pairingInfo = null;
+    state.pairingError = error.message;
+    throw error;
+  } finally {
+    state.pairingLoading = false;
+    renderDetail();
+  }
+}
+
+async function approveLatestSelectedInstancePairing() {
+  if (!state.selectedItem || !state.selectedId) {
+    return;
+  }
+  if (!isAdminModeEnabled()) {
+    pushStatus("error", "批准配对失败", "请先进入管理员模式。");
+    return;
+  }
+  if (!canOpenInstanceUi(state.selectedItem)) {
+    pushStatus("error", "批准配对失败", "实例尚未运行，先启动实例再处理设备配对。");
+    return;
+  }
+  state.pairingLoading = true;
+  renderDetail();
+  try {
+    const payload = await fetchJson(
+      `${instanceApiBase(state.selectedScope)}/${encodeURIComponent(state.selectedId)}/pairing/approve-latest`,
+      {
+        method: "POST",
+        adminAuth: true,
+      },
+    );
+    state.pairingInfo = payload?.item?.pairing ?? { pending: [], paired: [] };
+    state.pairingError = "";
+    const requestId = payload?.result?.requestId || "latest";
+    const deviceId = payload?.result?.device?.deviceId || "unknown-device";
+    pushStatus("success", `已批准 ${state.selectedId} 最新配对`, `${deviceId} (${requestId})`);
+  } catch (error) {
+    state.pairingError = error.message;
+    throw error;
+  } finally {
+    state.pairingLoading = false;
+    renderDetail();
+  }
 }
 
 async function copySelectedInstanceToken() {
@@ -1471,6 +1677,7 @@ async function copySelectedInstanceLoginGuide() {
     "2. 如果页面先要求站点账号密码，先完成站点登录；若你没有这组账号密码，请向管理员索取。",
     "3. 进入页面右上角 Control UI 设置。",
     "4. 把上面的登录 Token 粘贴进去，再点击连接。",
+    "5. 如果首次连接后提示 pairing required，请联系管理员在值班台批准该设备配对。",
   ].join("\n");
   const copied = await copyText(guide, `复制 ${state.selectedId} 登录说明`);
   pushStatus(copied ? "success" : "info", `已复制 ${state.selectedId} 登录说明`);
@@ -1771,6 +1978,16 @@ function bindEvents() {
   elements.copyUiLinkButton.addEventListener("click", () => {
     void copySelectedInstanceUiLink().catch((error) => {
       pushStatus("error", "复制 UI 链接失败", error.message);
+    });
+  });
+  elements.refreshPairingButton.addEventListener("click", () => {
+    void loadSelectedInstancePairing().catch((error) => {
+      pushStatus("error", "刷新配对失败", error.message);
+    });
+  });
+  elements.approveLatestPairingButton.addEventListener("click", () => {
+    void approveLatestSelectedInstancePairing().catch((error) => {
+      pushStatus("error", "批准最新配对失败", error.message);
     });
   });
   elements.copyLoginGuideButton.addEventListener("click", () => {

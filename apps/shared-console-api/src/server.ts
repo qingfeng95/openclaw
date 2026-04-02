@@ -404,6 +404,42 @@ function parseInstanceTokenRoute(url: URL) {
   );
 }
 
+function parseNamedInstancePairingRoute(
+  url: URL,
+  basePath: string,
+  pool: InstancePool,
+):
+  | { pool: InstancePool; id: string; action: "list" | "approve-latest" }
+  | null {
+  const listMatch = url.pathname.match(new RegExp(`^${basePath}/([^/]+)/pairing$`));
+  if (listMatch) {
+    return {
+      pool,
+      id: decodeURIComponent(listMatch[1] ?? ""),
+      action: "list",
+    };
+  }
+  const approveLatestMatch = url.pathname.match(
+    new RegExp(`^${basePath}/([^/]+)/pairing/approve-latest$`),
+  );
+  if (approveLatestMatch) {
+    return {
+      pool,
+      id: decodeURIComponent(approveLatestMatch[1] ?? ""),
+      action: "approve-latest",
+    };
+  }
+  return null;
+}
+
+function parseInstancePairingRoute(url: URL) {
+  return (
+    parseNamedInstancePairingRoute(url, "/api/instances", "shared") ??
+    parseNamedInstancePairingRoute(url, "/api/shared-instances", "shared") ??
+    parseNamedInstancePairingRoute(url, "/api/dedicated-instances", "dedicated")
+  );
+}
+
 function parseContainerRoute(url: URL):
   | { kind: "collection" }
   | { kind: "logs"; id: string }
@@ -730,6 +766,85 @@ async function handleInstanceTokenRequest(
       pool: route.pool,
       token,
     },
+  });
+}
+
+function parseJsonCommandStdout(
+  result: OpsCommandResult,
+  operation: string,
+): Record<string, unknown> {
+  const raw = result.stdout.trim();
+  if (!raw) {
+    throw new HttpError(502, `${operation} did not return JSON output.`, "bad_gateway");
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("json must be an object");
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    throw new HttpError(502, `${operation} returned invalid JSON output.`, "bad_gateway");
+  }
+}
+
+async function runInstancePairingCommand(
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+  route: { pool: InstancePool; id: string },
+  action: "list" | "approve-latest",
+): Promise<{ result: OpsCommandResult; json: Record<string, unknown> }> {
+  const result = await runOpsCommand(config, deps, {
+    scriptName: "pairing-instance.sh",
+    args: [action, route.id, "--root", resolveInstancesRoot(config, route.pool)],
+  });
+  return {
+    result,
+    json: parseJsonCommandStdout(result, `pairing-instance.sh ${action}`),
+  };
+}
+
+async function handleInstancePairingRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+  route: { pool: InstancePool; id: string; action: "list" | "approve-latest" },
+): Promise<void> {
+  requireAdminRequest(config, req);
+  const instance = await ensureInstance(config, deps, route.pool, route.id, false);
+
+  if (route.action === "list") {
+    if ((req.method ?? "GET").toUpperCase() !== "GET") {
+      throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
+    }
+    const pairing = await runInstancePairingCommand(config, deps, route, "list");
+    sendJson(res, 200, {
+      ok: true,
+      item: {
+        id: instance.id,
+        pool: route.pool,
+        pairing: pairing.json,
+      },
+    });
+    return;
+  }
+
+  if ((req.method ?? "POST").toUpperCase() !== "POST") {
+    throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
+  }
+
+  const approval = await runInstancePairingCommand(config, deps, route, "approve-latest");
+  const pairing = await runInstancePairingCommand(config, deps, route, "list");
+  sendJson(res, 200, {
+    ok: true,
+    action: "approve-latest",
+    item: {
+      id: instance.id,
+      pool: route.pool,
+      pairing: pairing.json,
+    },
+    result: approval.json,
   });
 }
 
@@ -1112,6 +1227,12 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
         const instanceTokenRoute = parseInstanceTokenRoute(url);
         if (instanceTokenRoute) {
           await handleInstanceTokenRequest(req, res, config, deps, instanceTokenRoute);
+          return;
+        }
+
+        const instancePairingRoute = parseInstancePairingRoute(url);
+        if (instancePairingRoute) {
+          await handleInstancePairingRequest(req, res, config, deps, instancePairingRoute);
           return;
         }
 

@@ -145,6 +145,8 @@
                 <div class="inline-actions">
                   <button id="open-ui-button" class="button" type="button">打开 UI</button>
                   <button id="copy-ui-link-button" class="button" type="button">复制 UI 链接</button>
+                  <button id="refresh-pairing-button" class="button hidden" type="button">刷新配对</button>
+                  <button id="approve-latest-pairing-button" class="button hidden" type="button">批准最新配对</button>
                   <button id="copy-login-guide-button" class="button hidden" type="button">复制登录说明</button>
                   <button id="copy-token-button" class="button hidden" type="button">复制 Token</button>
                   <button id="start-button" class="button button-primary" type="button">启动</button>
@@ -168,6 +170,13 @@
                   <button class="button button-primary" type="submit">保存名称</button>
                 </div>
               </form>
+            </section>
+
+            <section class="detail-card">
+              <div class="detail-card-header">
+                <h3>设备配对</h3>
+              </div>
+              <div id="pairing-summary" class="usage-summary"></div>
             </section>
 
             <section class="detail-card">

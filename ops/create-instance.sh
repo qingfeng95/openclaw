@@ -159,11 +159,15 @@ if [ "$INSTANCE_RUNTIME_KIND" = "container" ] && [ -z "$INSTANCE_CONTAINER_ROOT"
   INSTANCE_CONTAINER_ROOT="$(shared_ops_default_container_instances_root "$INSTANCES_ROOT")"
 fi
 
+mapfile -t INSTANCE_PORT_SEARCH_ROOTS < <(shared_ops_port_search_roots "$INSTANCES_ROOT" | awk '!seen[$0]++')
+
 if [ -n "$INSTANCE_PORT" ]; then
   shared_ops_validate_port "$INSTANCE_PORT" || shared_ops_fail "invalid port: $INSTANCE_PORT"
-  shared_ops_port_is_available "$INSTANCE_PORT" || shared_ops_fail "port is already in use: $INSTANCE_PORT"
+  shared_ops_port_is_assignable "$INSTANCE_PORT" "${INSTANCE_PORT_SEARCH_ROOTS[@]}" ||
+    shared_ops_fail "port is already in use or reserved by another instance: $INSTANCE_PORT"
 else
-  INSTANCE_PORT="$(shared_ops_find_available_port 19100 400)" || shared_ops_fail "failed to allocate an available port"
+  INSTANCE_PORT="$(shared_ops_find_available_port 19100 400 "${INSTANCE_PORT_SEARCH_ROOTS[@]}")" ||
+    shared_ops_fail "failed to allocate an available port"
 fi
 
 INSTANCE_DIR="$INSTANCES_ROOT/$INSTANCE_ID"

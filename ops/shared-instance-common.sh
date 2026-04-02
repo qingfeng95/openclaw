@@ -16,6 +16,14 @@ shared_ops_default_instances_root() {
   printf '%s\n' "$(shared_ops_repo_root)/.shared-instances"
 }
 
+shared_ops_default_dedicated_instances_root() {
+  if [ -n "${OPENCLAW_DEDICATED_INSTANCES_ROOT:-}" ]; then
+    printf '%s\n' "$OPENCLAW_DEDICATED_INSTANCES_ROOT"
+    return
+  fi
+  printf '%s\n' "$(shared_ops_repo_root)/.dedicated-instances"
+}
+
 shared_ops_default_container_repo_root() {
   if [ -n "${OPENCLAW_CONTAINER_REPO_ROOT:-}" ]; then
     printf '%s\n' "$OPENCLAW_CONTAINER_REPO_ROOT"
@@ -174,14 +182,73 @@ shared_ops_port_is_available() {
   node -e "const net = require('node:net'); const port = Number(process.argv[1]); const server = net.createServer(); server.once('error', () => process.exit(1)); server.once('listening', () => server.close(() => process.exit(0))); server.listen(port, '127.0.0.1');" "$port" >/dev/null 2>&1
 }
 
+shared_ops_reserved_ports_from_root() {
+  local root="${1:-}"
+
+  [ -n "$root" ] || return 0
+  [ -d "$root" ] || return 0
+
+  find "$root" -mindepth 2 -maxdepth 2 -type f -name instance.env -print 2>/dev/null |
+    while IFS= read -r env_file; do
+      awk -F= '
+        $1 == "INSTANCE_PORT" {
+          value = $2
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+          gsub(/^"/, "", value)
+          gsub(/"$/, "", value)
+          if (value ~ /^[0-9]+$/) {
+            print value
+          }
+        }
+      ' "$env_file"
+    done
+}
+
+shared_ops_port_search_roots() {
+  local current_root="${1:-}"
+
+  printf '%s\n' "$current_root"
+  printf '%s\n' "$(shared_ops_default_instances_root)"
+  printf '%s\n' "$(shared_ops_default_dedicated_instances_root)"
+}
+
+shared_ops_port_is_reserved() {
+  local port="$1"
+  shift || true
+  local root
+  local reserved_port
+
+  for root in "$@"; do
+    [ -n "$root" ] || continue
+    while IFS= read -r reserved_port; do
+      [ -n "$reserved_port" ] || continue
+      if [ "$reserved_port" = "$port" ]; then
+        return 0
+      fi
+    done < <(shared_ops_reserved_ports_from_root "$root")
+  done
+
+  return 1
+}
+
+shared_ops_port_is_assignable() {
+  local port="$1"
+  shift || true
+
+  shared_ops_port_is_available "$port" || return 1
+  shared_ops_port_is_reserved "$port" "$@" && return 1
+  return 0
+}
+
 shared_ops_find_available_port() {
   local start_port="$1"
   local attempts="${2:-200}"
+  shift 2 || true
   local port="$start_port"
   local remaining="$attempts"
 
   while [ "$remaining" -gt 0 ]; do
-    if shared_ops_port_is_available "$port"; then
+    if shared_ops_port_is_assignable "$port" "$@"; then
       printf '%s\n' "$port"
       return 0
     fi

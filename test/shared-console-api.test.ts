@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createServer as createHttpServer } from "node:http";
 import { describe, expect, it } from "vitest";
+import { WebSocket as TestWebSocket, WebSocketServer as TestWebSocketServer } from "ws";
 import {
   createSharedConsoleApiServer,
   type OpsCommandInvocation,
@@ -127,6 +129,49 @@ async function stopServer(server: { close: (cb: (error?: Error) => void) => void
       }
       resolve();
     });
+  });
+}
+
+async function startHttpEchoServer(
+  handler: (req: Parameters<Parameters<typeof createHttpServer>[0]>[0], res: Parameters<Parameters<typeof createHttpServer>[0]>[1]) => void,
+) {
+  const server = createHttpServer(handler);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to resolve echo server address.");
+  }
+  return {
+    server,
+    port: address.port,
+  };
+}
+
+async function waitForWebSocketMessage(socket: TestWebSocket): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const handleMessage = (data: Buffer | string) => {
+      cleanup();
+      resolve(Buffer.isBuffer(data) ? data.toString("utf8") : String(data));
+    };
+    const handleError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const handleClose = () => {
+      cleanup();
+      reject(new Error("websocket closed before a message was received"));
+    };
+    const cleanup = () => {
+      socket.off("message", handleMessage);
+      socket.off("error", handleError);
+      socket.off("close", handleClose);
+    };
+    socket.on("message", handleMessage);
+    socket.on("error", handleError);
+    socket.on("close", handleClose);
   });
 }
 
@@ -733,6 +778,137 @@ describe("shared console api", () => {
         expect(dockerInvocations).toHaveLength(4);
         expect(dockerInvocations.every((args) => args[0] === "exec" && args[1] === "crewclaw-theta")).toBe(true);
       } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("proxies container instance control-ui HTTP requests through the shared console route", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const upstreamRequests: Array<{ url: string; origin?: string }> = [];
+      const upstream = await startHttpEchoServer((req, res) => {
+        upstreamRequests.push({
+          url: req.url ?? "/",
+          origin: typeof req.headers.origin === "string" ? req.headers.origin : undefined,
+        });
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({ ok: true, url: req.url ?? "/" }));
+      });
+
+      await writeInstance(root, {
+        id: "ui-proxy",
+        name: "UI Proxy",
+        port: upstream.port,
+        runtimeKind: "container",
+        containerName: "crewclaw-ui-proxy",
+      });
+      await fs.writeFile(path.join(root, "ui-proxy", "run", "gateway.pid"), "6262\n", "utf8");
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        runDockerCommand: async (invocation) => {
+          if (invocation.args[0] === "inspect") {
+            return {
+              exitCode: 0,
+              stdout: "127.0.0.1\n",
+              stderr: "",
+            };
+          }
+          return {
+            exitCode: 1,
+            stdout: "",
+            stderr: `unexpected docker command: ${invocation.args.join(" ")}`,
+          };
+        },
+      });
+
+      try {
+        const response = await fetch(
+          `${baseUrl}/api/instances/ui-proxy/ui/__openclaw/control-ui-config.json?source=test`,
+          {
+            headers: {
+              Origin: "http://shared-console.example.test",
+            },
+          },
+        );
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({
+          ok: true,
+          url: "/__openclaw/control-ui-config.json?source=test",
+        });
+        expect(upstreamRequests).toEqual([
+          {
+            url: "/__openclaw/control-ui-config.json?source=test",
+            origin: `http://127.0.0.1:${upstream.port}`,
+          },
+        ]);
+      } finally {
+        await stopServer(server);
+        await stopServer(upstream.server);
+      }
+    });
+  });
+
+  it("proxies instance control-ui websocket traffic through the shared console route", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const upstreamServer = createHttpServer();
+      const upstreamWss = new TestWebSocketServer({ server: upstreamServer });
+      const upstreamRequests: Array<{ path: string; origin?: string }> = [];
+      upstreamWss.on("connection", (socket, req) => {
+        upstreamRequests.push({
+          path: req.url ?? "/",
+          origin: typeof req.headers.origin === "string" ? req.headers.origin : undefined,
+        });
+        socket.on("message", (data, isBinary) => {
+          socket.send(data, { binary: isBinary });
+        });
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        upstreamServer.once("error", reject);
+        upstreamServer.listen(0, "127.0.0.1", () => resolve());
+      });
+      const upstreamAddress = upstreamServer.address();
+      if (!upstreamAddress || typeof upstreamAddress === "string") {
+        throw new Error("Failed to resolve websocket upstream address.");
+      }
+
+      await writeInstance(root, {
+        id: "ws-proxy",
+        name: "WS Proxy",
+        port: upstreamAddress.port,
+      });
+      await fs.writeFile(path.join(root, "ws-proxy", "run", "gateway.pid"), `${process.pid}\n`, "utf8");
+
+      const { server, baseUrl } = await startTestServer({ root });
+      const proxyWsUrl = `${baseUrl.replace(/^http/, "ws")}/api/instances/ws-proxy/ui/`;
+
+      try {
+        const client = new TestWebSocket(proxyWsUrl, {
+          headers: {
+            Origin: "http://shared-console.example.test",
+          },
+        });
+        await new Promise<void>((resolve, reject) => {
+          client.once("open", () => resolve());
+          client.once("error", reject);
+        });
+
+        client.send("hello-through-proxy");
+        await expect(waitForWebSocketMessage(client)).resolves.toBe("hello-through-proxy");
+        expect(upstreamRequests).toEqual([
+          {
+            path: "/",
+            origin: `http://127.0.0.1:${upstreamAddress.port}`,
+          },
+        ]);
+
+        client.close();
+        await new Promise<void>((resolve) => client.once("close", () => resolve()));
+      } finally {
+        upstreamWss.close();
+        await stopServer(upstreamServer);
         await stopServer(server);
       }
     });

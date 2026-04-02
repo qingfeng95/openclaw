@@ -49,6 +49,7 @@ const elements = {
   detailMeta: document.querySelector("#detail-meta"),
   renameForm: document.querySelector("#rename-form"),
   renameInput: document.querySelector("#rename-input"),
+  openUiButton: document.querySelector("#open-ui-button"),
   startButton: document.querySelector("#start-button"),
   stopButton: document.querySelector("#stop-button"),
   restartButton: document.querySelector("#restart-button"),
@@ -323,7 +324,7 @@ function probeHealthLabel(item) {
     return { label: "检查失败", className: "chip-danger" };
   }
   if (item.probe.live && item.probe.ready) {
-    return { label: "可接单", className: "chip-success" };
+    return { label: "服务就绪", className: "chip-success" };
   }
   if (item.probe.live === false || item.probe.ready === false) {
     return { label: "待处理", className: "chip-danger" };
@@ -395,7 +396,27 @@ function buildWatchNote(item) {
   if (item.probe?.ready === false) {
     return "就绪检查没有通过，实例可能暂时不能接单。";
   }
+  if (instanceRuntimeLocation(item) === "container") {
+    return "实例服务已就绪，请通过值班台代理入口打开 UI，不要直接访问宿主机随机端口。";
+  }
   return `最近一次检查：存活 ${formatMaybe(item.probe?.live)} / 就绪 ${formatMaybe(item.probe?.ready)}`;
+}
+
+function instanceUiProxyPath(scope, id) {
+  return `${instanceApiBase(scope)}/${encodeURIComponent(id)}/ui/`;
+}
+
+function resolveInstanceUiUrl(scope, id) {
+  const proxyPath = instanceUiProxyPath(scope, id);
+  try {
+    return new URL(proxyPath, state.apiBase || window.location.origin).toString();
+  } catch {
+    return proxyPath;
+  }
+}
+
+function canOpenInstanceUi(item) {
+  return Boolean(item?.port) && item?.process?.state === "running";
 }
 
 async function fetchJson(path, options = {}) {
@@ -458,7 +479,7 @@ function renderSummary() {
       subtext: state.dedicatedInstances.length > 0 ? "这类实例更适合承接独占能力" : "当前还没有单独实例",
     },
     {
-      label: "当前可接单",
+      label: "当前健康可用",
       value: healthy,
       subtext: `${Math.max(state.instances.length - healthy, 0)} 个需要人工关注`,
     },
@@ -1043,12 +1064,22 @@ function renderDetail() {
     elements.detailBadge.textContent = "未选择实例";
     elements.detailEmpty.classList.remove("hidden");
     elements.detailContent.classList.add("hidden");
+    if (elements.openUiButton) {
+      elements.openUiButton.disabled = true;
+    }
     return;
   }
 
   elements.detailBadge.textContent = item.id;
   elements.detailTitle.textContent = item.name || item.id;
   elements.renameInput.value = item.name || "";
+  if (elements.openUiButton) {
+    elements.openUiButton.disabled = !canOpenInstanceUi(item);
+    elements.openUiButton.title =
+      instanceRuntimeLocation(item) === "container"
+        ? "通过 Shared Console 代理打开容器内实例 UI"
+        : "通过 Shared Console 代理打开实例 UI";
+  }
   renderMetaGrid(item);
   renderProbeGrid(item);
   renderUsageSummary(item);
@@ -1201,6 +1232,19 @@ async function runSelectedInstanceAction(action) {
   } finally {
     setBusy(false);
   }
+}
+
+function openSelectedInstanceUi() {
+  if (!state.selectedItem || !state.selectedId) {
+    return;
+  }
+  if (!canOpenInstanceUi(state.selectedItem)) {
+    pushStatus("error", "打开 UI 失败", "实例尚未运行，先启动实例再打开 UI。");
+    return;
+  }
+  const url = resolveInstanceUiUrl(state.selectedScope, state.selectedId);
+  window.open(url, "_blank", "noopener,noreferrer");
+  pushStatus("info", `已打开 ${state.selectedId} UI`, url);
 }
 
 async function loadContainerLogs(containerName, { announce = true } = {}) {
@@ -1483,6 +1527,9 @@ function bindEvents() {
   });
   elements.renameForm.addEventListener("submit", (event) => {
     void handleRenameSubmit(event);
+  });
+  elements.openUiButton.addEventListener("click", () => {
+    openSelectedInstanceUi();
   });
   elements.startButton.addEventListener("click", () => {
     void runSelectedInstanceAction("start");

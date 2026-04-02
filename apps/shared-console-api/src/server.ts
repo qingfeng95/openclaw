@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { WebSocket, WebSocketServer } from "ws";
 import { isMainModule } from "../../../src/infra/is-main.ts";
 import {
   getSharedConsoleContainerBySelector,
@@ -29,6 +33,17 @@ import {
 const DEFAULT_SHARED_CONSOLE_API_HOST = "127.0.0.1";
 const DEFAULT_SHARED_CONSOLE_API_PORT = 43100;
 const DEFAULT_SHARED_CONSOLE_API_PROBE_TIMEOUT_MS = 1_500;
+const SAFE_CONTAINER_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
+const HOP_BY_HOP_HEADERS = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
 
 type JsonValue = Record<string, unknown>;
 type InstancePool = "shared" | "dedicated";
@@ -293,6 +308,14 @@ function resolveRequestedContainerNames(body: Record<string, unknown>): string[]
   return names;
 }
 
+function normalizeUiProxyPath(rawPath: string | undefined): string {
+  const trimmed = rawPath?.trim() ?? "";
+  if (!trimmed || trimmed === "/") {
+    return "/";
+  }
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
 function parseNamedInstanceRoute(
   url: URL,
   basePath: string,
@@ -321,11 +344,37 @@ function parseNamedInstanceRoute(
   return null;
 }
 
+function parseNamedInstanceUiRoute(
+  url: URL,
+  basePath: string,
+  pool: InstancePool,
+):
+  | { pool: InstancePool; id: string; proxiedPath: string }
+  | null {
+  const match = url.pathname.match(new RegExp(`^${basePath}/([^/]+)/ui(?:/(.*))?$`));
+  if (!match) {
+    return null;
+  }
+  return {
+    pool,
+    id: decodeURIComponent(match[1] ?? ""),
+    proxiedPath: normalizeUiProxyPath(match[2]),
+  };
+}
+
 function parseInstanceRoute(url: URL) {
   return (
     parseNamedInstanceRoute(url, "/api/instances", "shared") ??
     parseNamedInstanceRoute(url, "/api/shared-instances", "shared") ??
     parseNamedInstanceRoute(url, "/api/dedicated-instances", "dedicated")
+  );
+}
+
+function parseInstanceUiRoute(url: URL) {
+  return (
+    parseNamedInstanceUiRoute(url, "/api/instances", "shared") ??
+    parseNamedInstanceUiRoute(url, "/api/shared-instances", "shared") ??
+    parseNamedInstanceUiRoute(url, "/api/dedicated-instances", "dedicated")
   );
 }
 
@@ -427,6 +476,184 @@ async function ensureInstance(
     throw new HttpError(404, `Instance not found: ${id}`, "not_found");
   }
   return instance;
+}
+
+async function resolveContainerBridgeIp(
+  deps: SharedConsoleApiDeps,
+  selector: string,
+): Promise<string> {
+  if (!SAFE_CONTAINER_SELECTOR.test(selector)) {
+    throw new HttpError(400, `Invalid container selector: ${selector}`);
+  }
+  const runDockerCommand = deps.runDockerCommand ?? runDockerCommandDefault;
+  const result = await runDockerCommand({
+    args: [
+      "inspect",
+      "-f",
+      "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+      selector,
+    ],
+  });
+  if (result.exitCode !== 0) {
+    throw new HttpError(
+      502,
+      result.stderr.trim() || result.stdout.trim() || `Failed to inspect container ${selector}.`,
+      "docker_inspect_failed",
+    );
+  }
+  const ipAddress = result.stdout.trim();
+  if (!ipAddress) {
+    throw new HttpError(409, `Container ${selector} does not have a bridge IP address yet.`, "conflict");
+  }
+  return ipAddress;
+}
+
+async function resolveInstanceProxyTarget(
+  deps: SharedConsoleApiDeps,
+  instance: SharedInstanceRecord,
+): Promise<{ host: string; port: number }> {
+  if (!instance.port) {
+    throw new HttpError(409, `Instance ${instance.id} does not have a configured port.`, "conflict");
+  }
+  if (instance.process.state !== "running") {
+    throw new HttpError(409, `Instance ${instance.id} is not running.`, "conflict");
+  }
+  if (instance.runtime.location === "container") {
+    const selector = instance.runtime.containerName?.trim() || instance.runtime.containerId?.trim();
+    if (!selector) {
+      throw new HttpError(
+        409,
+        `Instance ${instance.id} is container-managed but has no container selector.`,
+        "conflict",
+      );
+    }
+    return {
+      host: await resolveContainerBridgeIp(deps, selector),
+      port: instance.port,
+    };
+  }
+  return {
+    host: "127.0.0.1",
+    port: instance.port,
+  };
+}
+
+async function readInstanceProxyToken(instance: SharedInstanceRecord): Promise<string | null> {
+  if (instance.runtime.location !== "container") {
+    return null;
+  }
+  try {
+    const content = await fs.readFile(path.join(instance.paths.dir, "instance.env"), "utf8");
+    const match = content.match(/^INSTANCE_PROXY_TOKEN=(?:"([^"]*)"|([^\r\n#]+))/m);
+    const value = (match?.[1] ?? match?.[2] ?? "").trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+function copyProxyRequestHeaders(
+  headers: IncomingMessage["headers"],
+  targetHost: string,
+  targetPort: number,
+  extraHeaders: Record<string, string> = {},
+): Headers {
+  const forwarded = new Headers();
+  for (const [key, value] of Object.entries(headers)) {
+    if (!key || HOP_BY_HOP_HEADERS.has(key.toLowerCase()) || key.toLowerCase() === "host") {
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        forwarded.append(key, entry);
+      }
+      continue;
+    }
+    if (typeof value === "string") {
+      forwarded.set(key, value);
+    }
+  }
+  forwarded.set("host", `${targetHost}:${targetPort}`);
+  for (const [key, value] of Object.entries(extraHeaders)) {
+    forwarded.set(key, value);
+  }
+  return forwarded;
+}
+
+function buildInstanceProxyOrigin(targetHost: string, targetPort: number): string {
+  return `http://${targetHost}:${targetPort}`;
+}
+
+function copyProxyResponseHeaders(source: Headers, res: ServerResponse): void {
+  for (const [key, value] of source.entries()) {
+    if (HOP_BY_HOP_HEADERS.has(key.toLowerCase()) || key.toLowerCase() === "content-length") {
+      continue;
+    }
+    res.setHeader(key, value);
+  }
+}
+
+async function handleInstanceUiProxy(
+  req: IncomingMessage,
+  res: ServerResponse,
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+  route: { pool: InstancePool; id: string; proxiedPath: string },
+  url: URL,
+): Promise<void> {
+  const instance = await ensureInstance(config, deps, route.pool, route.id, false);
+  const target = await resolveInstanceProxyTarget(deps, instance);
+  const proxyToken = await readInstanceProxyToken(instance);
+  const targetUrl = new URL(`http://${target.host}:${target.port}${route.proxiedPath}${url.search}`);
+  const method = (req.method ?? "GET").toUpperCase();
+  const init: RequestInit & { duplex?: "half" } = {
+    method,
+    headers: copyProxyRequestHeaders(
+      req.headers,
+      target.host,
+      target.port,
+      {
+        ...(proxyToken ? { authorization: `Bearer ${proxyToken}` } : {}),
+        ...(req.headers.origin ? { origin: buildInstanceProxyOrigin(target.host, target.port) } : {}),
+      },
+    ),
+    redirect: "manual",
+  };
+  if (method !== "GET" && method !== "HEAD") {
+    init.body = req as unknown as BodyInit;
+    init.duplex = "half";
+  }
+
+  let response: Response;
+  try {
+    response = await (deps.fetchImpl ?? fetch)(targetUrl, init);
+  } catch (error) {
+    throw new HttpError(
+      502,
+      error instanceof Error ? error.message : `Failed to proxy request to ${targetUrl}.`,
+      "proxy_upstream_failed",
+    );
+  }
+  res.statusCode = response.status;
+  copyProxyResponseHeaders(response.headers, res);
+  if (!response.body || method === "HEAD") {
+    res.end();
+    return;
+  }
+  Readable.fromWeb(response.body).pipe(res);
+}
+
+function writeUpgradeFailure(socket: Socket, statusCode: number, message: string): void {
+  socket.write(
+    [
+      `HTTP/1.1 ${statusCode} ${statusCode === 404 ? "Not Found" : "Bad Gateway"}`,
+      "Connection: close",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      message,
+    ].join("\r\n"),
+  );
+  socket.destroy();
 }
 
 async function runOpsCommandDefault(
@@ -763,8 +990,9 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
     ...resolveSharedConsoleApiConfig(deps.env),
     ...deps.config,
   };
+  const proxyWebSocketServer = new WebSocketServer({ noServer: true });
 
-  return createServer((req, res) => {
+  const server = createServer((req, res) => {
     void (async () => {
       try {
         setCorsHeaders(res);
@@ -777,6 +1005,12 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
         const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
         if (url.pathname === "/healthz") {
           sendJson(res, 200, { ok: true, status: "live" });
+          return;
+        }
+
+        const instanceUiRoute = parseInstanceUiRoute(url);
+        if (instanceUiRoute) {
+          await handleInstanceUiProxy(req, res, config, deps, instanceUiRoute, url);
           return;
         }
 
@@ -904,6 +1138,111 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
       }
     })();
   });
+
+  server.on("upgrade", (req, socket, head) => {
+    const hostHeader = Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host;
+    const url = new URL(req.url ?? "/", `http://${hostHeader ?? "localhost"}`);
+    const route = parseInstanceUiRoute(url);
+    if (!route) {
+      writeUpgradeFailure(socket, 404, "Not Found");
+      return;
+    }
+
+    void (async () => {
+      try {
+        const instance = await ensureInstance(config, deps, route.pool, route.id, false);
+        const target = await resolveInstanceProxyTarget(deps, instance);
+        const proxyToken = await readInstanceProxyToken(instance);
+        const targetUrl = `ws://${target.host}:${target.port}${route.proxiedPath}${url.search}`;
+        proxyWebSocketServer.handleUpgrade(req, socket, head, (clientSocket) => {
+          const pendingMessages: Array<{ data: Buffer; isBinary: boolean }> = [];
+          let targetReady = false;
+          const targetSocket = new WebSocket(targetUrl, {
+            headers: {
+              ...(proxyToken ? { Authorization: `Bearer ${proxyToken}` } : {}),
+              Origin: buildInstanceProxyOrigin(target.host, target.port),
+            },
+          });
+
+          const closeBoth = (code = 1011, reason = "proxy error") => {
+            if (
+              clientSocket.readyState === WebSocket.OPEN ||
+              clientSocket.readyState === WebSocket.CONNECTING
+            ) {
+              clientSocket.close(code, reason);
+            }
+            if (
+              targetSocket.readyState === WebSocket.OPEN ||
+              targetSocket.readyState === WebSocket.CONNECTING
+            ) {
+              targetSocket.close(code, reason);
+            }
+          };
+
+          clientSocket.on("message", (data, isBinary) => {
+            const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
+            if (!targetReady) {
+              pendingMessages.push({ data: chunk, isBinary });
+              return;
+            }
+            if (targetSocket.readyState === WebSocket.OPEN) {
+              targetSocket.send(chunk, { binary: isBinary });
+            }
+          });
+          clientSocket.on("close", (code, reason) => {
+            if (
+              targetSocket.readyState === WebSocket.OPEN ||
+              targetSocket.readyState === WebSocket.CONNECTING
+            ) {
+              if (code >= 1000 && code !== 1005 && code !== 1006 && code !== 1015) {
+                targetSocket.close(code, Buffer.isBuffer(reason) ? reason.toString() : String(reason ?? ""));
+              } else {
+                targetSocket.close();
+              }
+            }
+          });
+          clientSocket.on("error", () => {
+            closeBoth();
+          });
+
+          targetSocket.on("open", () => {
+            targetReady = true;
+            for (const message of pendingMessages.splice(0)) {
+              targetSocket.send(message.data, { binary: message.isBinary });
+            }
+          });
+          targetSocket.on("message", (data, isBinary) => {
+            if (clientSocket.readyState === WebSocket.OPEN) {
+              clientSocket.send(data, { binary: isBinary });
+            }
+          });
+          targetSocket.on("close", (code, reason) => {
+            if (
+              clientSocket.readyState === WebSocket.OPEN ||
+              clientSocket.readyState === WebSocket.CONNECTING
+            ) {
+              if (code >= 1000 && code !== 1005 && code !== 1006 && code !== 1015) {
+                clientSocket.close(code, Buffer.isBuffer(reason) ? reason.toString() : String(reason ?? ""));
+              } else {
+                clientSocket.close();
+              }
+            }
+          });
+          targetSocket.on("error", () => {
+            closeBoth();
+          });
+        });
+      } catch (error) {
+        writeUpgradeFailure(
+          socket,
+          error instanceof HttpError && error.statusCode === 404 ? 404 : 502,
+          error instanceof Error ? error.message : "Instance UI proxy upgrade failed.",
+        );
+      }
+    })();
+  });
+
+  return server;
 }
 
 export async function startSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): Promise<{

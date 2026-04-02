@@ -62,6 +62,20 @@ if [ "${INSTANCE_RUNTIME_KIND:-host}" = "container" ]; then
   shared_ops_require_command docker
 
   container_selector="$(shared_ops_container_selector)"
+  effective_bind="${INSTANCE_BIND}"
+  if [ "$effective_bind" = "loopback" ]; then
+    # Keep the instance private, but listen on the container NIC so the host-side
+    # Shared Console reverse proxy can reach it over Docker bridge networking.
+    effective_bind="lan"
+  fi
+  if [ "$effective_bind" != "loopback" ] && [ -z "${INSTANCE_PROXY_TOKEN:-}" ]; then
+    INSTANCE_PROXY_TOKEN="$(node -e "console.log(require('node:crypto').randomBytes(18).toString('base64url'))")"
+    if grep -q '^INSTANCE_PROXY_TOKEN=' "$INSTANCE_DIR/instance.env"; then
+      sed -i "s/^INSTANCE_PROXY_TOKEN=.*/INSTANCE_PROXY_TOKEN=\"${INSTANCE_PROXY_TOKEN}\"/" "$INSTANCE_DIR/instance.env"
+    else
+      printf '\nINSTANCE_PROXY_TOKEN="%s"\n' "$INSTANCE_PROXY_TOKEN" >>"$INSTANCE_DIR/instance.env"
+    fi
+  fi
   container_repo_root="${INSTANCE_CONTAINER_REPO_ROOT:-$(shared_ops_default_container_repo_root)}"
   container_state_dir="${INSTANCE_CONTAINER_STATE_DIR:-}"
   container_run_dir="${INSTANCE_CONTAINER_RUN_DIR:-}"
@@ -91,6 +105,7 @@ stderr_log="${11}"
 port="${12}"
 bind="${13}"
 verbose="${14}"
+proxy_token="${15}"
 
 [ -f "$config_path" ] || { printf "config file not found: %s\n" "$config_path" >&2; exit 41; }
 [ -f "$repo_root/openclaw.mjs" ] || { printf "entrypoint not found: %s/openclaw.mjs\n" "$repo_root" >&2; exit 42; }
@@ -109,6 +124,9 @@ fi
 
 cd "$repo_root"
 set -- node openclaw.mjs gateway --port "$port" --bind "$bind" --allow-unconfigured
+if [ -n "$proxy_token" ]; then
+  set -- "$@" --auth token --token "$proxy_token"
+fi
 if [ "$verbose" = "1" ]; then
   set -- "$@" --verbose
 fi
@@ -122,7 +140,7 @@ fi
   nohup "$@" >>"$stdout_log" 2>>"$stderr_log" < /dev/null &
   echo $! >"$pid_file"
 )
-' sh "$INSTANCE_ID" "$INSTANCE_NAME" "$container_repo_root" "$container_config_path" "$OPENCLAW_PROFILE" "$container_state_dir" "$container_run_dir" "$container_log_dir" "$container_pid_file" "$container_log_dir/gateway.stdout.log" "$container_log_dir/gateway.stderr.log" "$INSTANCE_PORT" "$INSTANCE_BIND" "$GATEWAY_VERBOSE"
+' sh "$INSTANCE_ID" "$INSTANCE_NAME" "$container_repo_root" "$container_config_path" "$OPENCLAW_PROFILE" "$container_state_dir" "$container_run_dir" "$container_log_dir" "$container_pid_file" "$container_log_dir/gateway.stdout.log" "$container_log_dir/gateway.stderr.log" "$INSTANCE_PORT" "$effective_bind" "$GATEWAY_VERBOSE" "${INSTANCE_PROXY_TOKEN:-}"
 
   for _ in $(seq 1 40); do
     if [ -f "$INSTANCE_PID_FILE" ]; then

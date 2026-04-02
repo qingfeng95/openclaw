@@ -650,8 +650,8 @@ function renderContainers() {
   if (state.containers.length === 0) {
     const message =
       meta.totalDockerContainers > 0
-        ? "Docker 里有容器在运行，但当前还没有发现和 CrewClaw / OpenClaw 相关、或已被实例绑定的容器。"
-        : "当前还没有发现已纳管的相关容器。";
+        ? "Docker 里有容器在运行，但当前还没有任何实例绑定到容器；这个面板只显示已被实例引用或声明过的容器。"
+        : "当前还没有任何实例绑定到容器。";
     elements.containersPanel.innerHTML = `
       <div class="empty-state" style="min-height: 180px;">${escapeHtml(message)}</div>
     `;
@@ -687,8 +687,12 @@ function renderContainers() {
               </div>
             `
           : '<div class="container-card-note">当前还没有实例明确绑定到这个容器。</div>';
+      const canOperate =
+        container.source === "docker" &&
+        Array.isArray(container.attachedInstances) &&
+        container.attachedInstances.length > 0;
       const actions =
-        container.source === "docker"
+        canOperate
           ? `
               <div class="container-card-actions">
                 <button class="button" type="button" data-container-action="logs" data-container-name="${escapeHtml(container.name)}">查看日志</button>
@@ -697,6 +701,12 @@ function renderContainers() {
                 <button class="button" type="button" data-container-action="restart" data-container-name="${escapeHtml(container.name)}">重启</button>
               </div>
             `
+          : container.source === "docker"
+            ? `
+                <div class="container-card-note">
+                  这个容器当前没有被任何实例绑定，所以这里只展示状态，不提供容器级操作。
+                </div>
+              `
           : `
               <div class="container-card-note">
                 这个容器目前只是实例侧声明，Docker 里还没有发现对应实体，所以暂时不能直接操作。
@@ -1036,7 +1046,7 @@ async function loadInstances({ preserveSelection = true } = {}) {
     const [payload, dedicatedPayload, containersPayload] = await Promise.all([
       fetchJson("/api/instances?includeProbe=1"),
       fetchJson("/api/dedicated-instances?includeProbe=1"),
-      fetchJson("/api/containers?all=1").catch((error) => ({
+      fetchJson("/api/containers").catch((error) => ({
         ok: false,
         items: [],
         meta: null,

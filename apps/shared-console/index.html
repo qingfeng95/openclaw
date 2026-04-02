@@ -67,12 +67,12 @@
         <div class="panel-header">
           <div>
             <p class="section-kicker">容器总览</p>
-            <h2>当前已纳管的 CrewClaw / OpenClaw 容器</h2>
+            <h2>当前被实例绑定的容器</h2>
           </div>
         </div>
         <div id="containers-panel" class="containers-panel"></div>
         <div id="container-logs-panel" class="container-logs-panel empty-state" style="min-height: 180px;">
-          选一个容器查看最近日志，或直接在容器卡片上执行启动、停止、重启。
+          这里只展示已被实例绑定或声明过的容器。选一个容器查看最近日志，或对已绑定实例的容器执行启动、停止、重启。
         </div>
       </section>
 
@@ -208,8 +208,9 @@
             </div>
           </form>
           <div class="callout">
-            如果部署位置选“已有容器”，这次会把实例正式标记成容器目标实例。
-            这类实例不会再按宿主机方式启动，后续应通过容器侧链路接管。
+            当前页面不会创建 Docker 容器。
+            如果部署位置选“已有容器”，正确顺序是：先在宿主机或编排层准备好容器和挂载，再在这里创建实例并绑定到那个容器。
+            这类实例不会按宿主机方式启动，后续会通过容器侧链路接管。
           </div>
         </section>
       </main>

@@ -39,6 +39,7 @@ async function sendFile(res, filePath) {
 
   res.statusCode = 200;
   res.setHeader("Content-Type", contentTypes.get(path.extname(filePath)) || "application/octet-stream");
+  res.setHeader("Cache-Control", "no-store");
   createReadStream(filePath).pipe(res);
 }
 

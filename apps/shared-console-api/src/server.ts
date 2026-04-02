@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
@@ -56,6 +57,7 @@ export type SharedConsoleApiConfig = {
   dedicatedInstancesRoot: string;
   bashPath: string;
   probeTimeoutMs: number;
+  adminToken: string | null;
 };
 
 export type OpsCommandInvocation = {
@@ -128,6 +130,7 @@ export function resolveSharedConsoleApiConfig(
       env.SHARED_CONSOLE_API_PROBE_TIMEOUT_MS,
       DEFAULT_SHARED_CONSOLE_API_PROBE_TIMEOUT_MS,
     ),
+    adminToken: env.SHARED_CONSOLE_ADMIN_TOKEN?.trim() || null,
   };
 }
 
@@ -378,6 +381,29 @@ function parseInstanceUiRoute(url: URL) {
   );
 }
 
+function parseNamedInstanceTokenRoute(
+  url: URL,
+  basePath: string,
+  pool: InstancePool,
+): { pool: InstancePool; id: string } | null {
+  const match = url.pathname.match(new RegExp(`^${basePath}/([^/]+)/token$`));
+  if (!match) {
+    return null;
+  }
+  return {
+    pool,
+    id: decodeURIComponent(match[1] ?? ""),
+  };
+}
+
+function parseInstanceTokenRoute(url: URL) {
+  return (
+    parseNamedInstanceTokenRoute(url, "/api/instances", "shared") ??
+    parseNamedInstanceTokenRoute(url, "/api/shared-instances", "shared") ??
+    parseNamedInstanceTokenRoute(url, "/api/dedicated-instances", "dedicated")
+  );
+}
+
 function parseContainerRoute(url: URL):
   | { kind: "collection" }
   | { kind: "logs"; id: string }
@@ -539,16 +565,42 @@ async function resolveInstanceProxyTarget(
 }
 
 async function readInstanceProxyToken(instance: SharedInstanceRecord): Promise<string | null> {
-  if (instance.runtime.location !== "container") {
-    return null;
-  }
   try {
     const content = await fs.readFile(path.join(instance.paths.dir, "instance.env"), "utf8");
-    const match = content.match(/^INSTANCE_PROXY_TOKEN=(?:"([^"]*)"|([^\r\n#]+))/m);
+    const match = content.match(
+      /^(?:INSTANCE_PROXY_TOKEN|OPENCLAW_GATEWAY_TOKEN)=(?:"([^"]*)"|([^\r\n#]+))/m,
+    );
     const value = (match?.[1] ?? match?.[2] ?? "").trim();
     return value || null;
   } catch {
     return null;
+  }
+}
+
+function readAdminTokenFromRequest(req: IncomingMessage): string | null {
+  const raw = req.headers["x-shared-console-admin-token"];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed || null;
+}
+
+function isSecretEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left, "utf8");
+  const rightBuffer = Buffer.from(right, "utf8");
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function requireAdminRequest(config: SharedConsoleApiConfig, req: IncomingMessage): void {
+  const configuredToken = config.adminToken?.trim() || "";
+  if (!configuredToken) {
+    throw new HttpError(404, "Admin mode is not enabled.", "not_found");
+  }
+  const requestToken = readAdminTokenFromRequest(req);
+  if (!requestToken || !isSecretEqual(configuredToken, requestToken)) {
+    throw new HttpError(403, "Admin token is invalid.", "forbidden");
   }
 }
 
@@ -641,6 +693,44 @@ async function handleInstanceUiProxy(
     return;
   }
   Readable.fromWeb(response.body).pipe(res);
+}
+
+async function handleAdminValidate(
+  req: IncomingMessage,
+  res: ServerResponse,
+  config: SharedConsoleApiConfig,
+): Promise<void> {
+  if ((req.method ?? "GET").toUpperCase() !== "GET") {
+    throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
+  }
+  requireAdminRequest(config, req);
+  sendJson(res, 200, { ok: true, admin: true });
+}
+
+async function handleInstanceTokenRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+  route: { pool: InstancePool; id: string },
+): Promise<void> {
+  if ((req.method ?? "GET").toUpperCase() !== "GET") {
+    throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
+  }
+  requireAdminRequest(config, req);
+  const instance = await ensureInstance(config, deps, route.pool, route.id, false);
+  const token = await readInstanceProxyToken(instance);
+  if (!token) {
+    throw new HttpError(404, `Instance ${instance.id} does not have a token.`, "not_found");
+  }
+  sendJson(res, 200, {
+    ok: true,
+    item: {
+      id: instance.id,
+      pool: route.pool,
+      token,
+    },
+  });
 }
 
 function writeUpgradeFailure(socket: Socket, statusCode: number, message: string): void {
@@ -1008,9 +1098,20 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
           return;
         }
 
+        if (url.pathname === "/api/admin/validate") {
+          await handleAdminValidate(req, res, config);
+          return;
+        }
+
         const instanceUiRoute = parseInstanceUiRoute(url);
         if (instanceUiRoute) {
           await handleInstanceUiProxy(req, res, config, deps, instanceUiRoute, url);
+          return;
+        }
+
+        const instanceTokenRoute = parseInstanceTokenRoute(url);
+        if (instanceTokenRoute) {
+          await handleInstanceTokenRequest(req, res, config, deps, instanceTokenRoute);
           return;
         }
 

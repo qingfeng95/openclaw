@@ -1,11 +1,14 @@
 const DEFAULT_API_PORT = "43100";
 const API_BASE_STORAGE_KEY = "crewclaw.sharedConsole.apiBase";
 const AUTO_REFRESH_STORAGE_KEY = "crewclaw.sharedConsole.autoRefresh";
+const ADMIN_TOKEN_STORAGE_KEY = "crewclaw.sharedConsole.adminToken";
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
 const STATUS_LIMIT = 14;
 
 const state = {
   apiBase: "",
+  adminToken: "",
+  adminModeAvailable: false,
   sharedInstances: [],
   dedicatedInstances: [],
   instances: [],
@@ -26,6 +29,10 @@ const state = {
 const elements = {
   apiBaseInput: document.querySelector("#api-base-input"),
   applyApiBaseButton: document.querySelector("#apply-api-base-button"),
+  adminTokenInput: document.querySelector("#admin-token-input"),
+  enableAdminModeButton: document.querySelector("#enable-admin-mode-button"),
+  clearAdminModeButton: document.querySelector("#clear-admin-mode-button"),
+  adminModeNote: document.querySelector("#admin-mode-note"),
   refreshButton: document.querySelector("#refresh-button"),
   autoRefreshCheckbox: document.querySelector("#auto-refresh-checkbox"),
   connectionNote: document.querySelector("#connection-note"),
@@ -50,6 +57,7 @@ const elements = {
   renameForm: document.querySelector("#rename-form"),
   renameInput: document.querySelector("#rename-input"),
   openUiButton: document.querySelector("#open-ui-button"),
+  copyTokenButton: document.querySelector("#copy-token-button"),
   startButton: document.querySelector("#start-button"),
   stopButton: document.querySelector("#stop-button"),
   restartButton: document.querySelector("#restart-button"),
@@ -72,6 +80,10 @@ function resolveDefaultApiBase() {
   const resolvedProtocol = protocol === "file:" ? "http:" : protocol;
   const resolvedHost = hostname || "127.0.0.1";
   return `${resolvedProtocol}//${resolvedHost}:${DEFAULT_API_PORT}`;
+}
+
+function resolveStoredAdminToken() {
+  return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)?.trim() || "";
 }
 
 function normalizeApiBase(value) {
@@ -118,6 +130,35 @@ function joinApiUrl(base, path) {
     return normalizedPath;
   }
   return `${basePath}${normalizedPath}`;
+}
+
+function isAdminModeEnabled() {
+  return Boolean(state.adminToken);
+}
+
+function updateAdminModeUi() {
+  if (!elements.adminTokenInput || !elements.adminModeNote) {
+    return;
+  }
+  if (!state.adminModeAvailable) {
+    elements.adminTokenInput.disabled = true;
+    elements.enableAdminModeButton.disabled = true;
+    elements.clearAdminModeButton.disabled = true;
+    elements.adminModeNote.textContent = "当前服务器未启用管理员模式。";
+    if (elements.copyTokenButton) {
+      elements.copyTokenButton.classList.add("hidden");
+    }
+    return;
+  }
+  elements.adminTokenInput.disabled = false;
+  elements.enableAdminModeButton.disabled = false;
+  elements.clearAdminModeButton.disabled = !isAdminModeEnabled();
+  elements.adminModeNote.textContent = isAdminModeEnabled()
+    ? "管理员模式已启用，可复制当前实例 Token。"
+    : "当前未进入管理员模式。";
+  if (elements.copyTokenButton) {
+    elements.copyTokenButton.classList.toggle("hidden", !isAdminModeEnabled() || !state.selectedItem);
+  }
 }
 
 function setBusy(nextBusy) {
@@ -462,12 +503,18 @@ function canOpenInstanceUi(item) {
 }
 
 async function fetchJson(path, options = {}) {
+  const { adminAuth = false, headers: extraHeaders = {}, ...fetchOptions } = options;
   const response = await fetch(joinApiUrl(state.apiBase, path), {
     headers: {
       "Content-Type": "application/json",
-      ...(options.headers ?? {}),
+      ...(adminAuth && state.adminToken
+        ? {
+            "X-Shared-Console-Admin-Token": state.adminToken,
+          }
+        : {}),
+      ...extraHeaders,
     },
-    ...options,
+    ...fetchOptions,
   });
 
   const text = await response.text();
@@ -1109,6 +1156,11 @@ function renderDetail() {
     if (elements.openUiButton) {
       elements.openUiButton.disabled = true;
     }
+    if (elements.copyTokenButton) {
+      elements.copyTokenButton.classList.add("hidden");
+      elements.copyTokenButton.disabled = true;
+    }
+    updateAdminModeUi();
     return;
   }
 
@@ -1122,11 +1174,16 @@ function renderDetail() {
         ? "通过 Shared Console 代理打开容器内实例 UI"
         : "通过 Shared Console 代理打开实例 UI";
   }
+  if (elements.copyTokenButton) {
+    elements.copyTokenButton.disabled = !isAdminModeEnabled();
+    elements.copyTokenButton.classList.toggle("hidden", !isAdminModeEnabled());
+  }
   renderMetaGrid(item);
   renderProbeGrid(item);
   renderUsageSummary(item);
   elements.detailEmpty.classList.add("hidden");
   elements.detailContent.classList.remove("hidden");
+  updateAdminModeUi();
 }
 
 function renderAll() {
@@ -1287,6 +1344,57 @@ function openSelectedInstanceUi() {
   const url = resolveInstanceUiUrl(state.selectedScope, state.selectedId);
   window.open(url, "_blank", "noopener,noreferrer");
   pushStatus("info", `已打开 ${state.selectedId} UI`, url);
+}
+
+async function enableAdminMode() {
+  if (!state.adminModeAvailable) {
+    pushStatus("error", "管理员模式不可用", "当前服务器未启用管理员模式。");
+    return;
+  }
+  const token = elements.adminTokenInput.value.trim();
+  if (!token) {
+    pushStatus("error", "管理员模式不可用", "管理员口令不能为空。");
+    return;
+  }
+  await fetchJson("/api/admin/validate", { adminAuth: false, headers: { "X-Shared-Console-Admin-Token": token } });
+  state.adminToken = token;
+  sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+  updateAdminModeUi();
+  renderDetail();
+  pushStatus("success", "管理员模式已启用", "现在可以复制当前实例 Token。");
+}
+
+function clearAdminMode() {
+  state.adminToken = "";
+  sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+  elements.adminTokenInput.value = "";
+  updateAdminModeUi();
+  renderDetail();
+  pushStatus("info", "已退出管理员模式");
+}
+
+async function copySelectedInstanceToken() {
+  if (!state.selectedItem || !state.selectedId) {
+    return;
+  }
+  if (!isAdminModeEnabled()) {
+    pushStatus("error", "复制失败", "请先进入管理员模式。");
+    return;
+  }
+  const payload = await fetchJson(`${instanceApiBase(state.selectedScope)}/${encodeURIComponent(state.selectedId)}/token`, {
+    adminAuth: true,
+  });
+  const token = payload?.item?.token;
+  if (typeof token !== "string" || !token) {
+    throw new Error("当前实例没有可复制的 Token。");
+  }
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(token);
+    pushStatus("success", `已复制 ${state.selectedId} Token`);
+    return;
+  }
+  window.prompt(`复制 ${state.selectedId} Token`, token);
+  pushStatus("info", `已显示 ${state.selectedId} Token`);
 }
 
 async function loadContainerLogs(containerName, { announce = true } = {}) {
@@ -1527,6 +1635,14 @@ function bindEvents() {
   elements.applyApiBaseButton.addEventListener("click", () => {
     void applyApiBase(elements.apiBaseInput.value);
   });
+  elements.enableAdminModeButton.addEventListener("click", () => {
+    void enableAdminMode().catch((error) => {
+      pushStatus("error", "管理员模式启用失败", error.message);
+    });
+  });
+  elements.clearAdminModeButton.addEventListener("click", () => {
+    clearAdminMode();
+  });
   elements.refreshButton.addEventListener("click", () => {
     void loadInstances();
   });
@@ -1573,6 +1689,11 @@ function bindEvents() {
   elements.openUiButton.addEventListener("click", () => {
     openSelectedInstanceUi();
   });
+  elements.copyTokenButton.addEventListener("click", () => {
+    void copySelectedInstanceToken().catch((error) => {
+      pushStatus("error", "复制 Token 失败", error.message);
+    });
+  });
   elements.startButton.addEventListener("click", () => {
     void runSelectedInstanceAction("start");
   });
@@ -1605,12 +1726,16 @@ async function loadRuntimeConfig() {
 async function init() {
   await loadRuntimeConfig();
   await hydrateSelectionFromHash();
+  state.adminModeAvailable = window.__SHARED_CONSOLE_CONFIG__?.adminModeAvailable === true;
   state.apiBase = resolveDefaultApiBase();
+  state.adminToken = resolveStoredAdminToken();
   elements.apiBaseInput.value = state.apiBase;
+  elements.adminTokenInput.value = state.adminToken;
   elements.autoRefreshCheckbox.checked = localStorage.getItem(AUTO_REFRESH_STORAGE_KEY) === "1";
   elements.statusFeed.innerHTML = "";
   bindEvents();
   syncCreateFormConstraints();
+  updateAdminModeUi();
   configureAutoRefresh(elements.autoRefreshCheckbox.checked);
   pushStatus("info", "值班台已启动", `API ${state.apiBase}`);
   await loadInstances({ preserveSelection: true });

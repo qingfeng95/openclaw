@@ -31,10 +31,19 @@
             </button>
             <button id="refresh-button" class="button" type="button">刷新</button>
           </div>
+          <label class="field">
+            <span>管理员口令</span>
+            <input id="admin-token-input" type="password" spellcheck="false" placeholder="输入后解锁管理员模式" />
+          </label>
+          <div class="inline-actions">
+            <button id="enable-admin-mode-button" class="button" type="button">进入管理员模式</button>
+            <button id="clear-admin-mode-button" class="button" type="button">退出管理员模式</button>
+          </div>
           <label class="toggle">
             <input id="auto-refresh-checkbox" type="checkbox" />
             <span>15 秒自动刷新</span>
           </label>
+          <p id="admin-mode-note" class="connection-note">当前未进入管理员模式。</p>
           <p id="connection-note" class="connection-note">尚未加载数据。</p>
         </div>
       </header>
@@ -135,6 +144,7 @@
                 <h3 id="detail-title">-</h3>
                 <div class="inline-actions">
                   <button id="open-ui-button" class="button" type="button">打开 UI</button>
+                  <button id="copy-token-button" class="button hidden" type="button">复制 Token</button>
                   <button id="start-button" class="button button-primary" type="button">启动</button>
                   <button id="stop-button" class="button" type="button">停止</button>
                   <button id="restart-button" class="button" type="button">重启</button>

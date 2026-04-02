@@ -10,6 +10,7 @@ const port = Number.parseInt(process.env.SHARED_CONSOLE_PORT ?? "43101", 10);
 const apiBase =
   process.env.SHARED_CONSOLE_API_BASE?.trim() ||
   `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:43100`;
+const adminModeAvailable = Boolean(process.env.SHARED_CONSOLE_ADMIN_TOKEN?.trim());
 
 const contentTypes = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -59,7 +60,7 @@ const server = createServer((req, res) => {
         res.statusCode = 200;
         res.setHeader("Cache-Control", "no-store");
         res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ apiBase }));
+        res.end(JSON.stringify({ apiBase, adminModeAvailable }));
         return;
       }
 

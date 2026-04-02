@@ -31,6 +31,7 @@ async function writeInstance(
     runtimeKind?: "host" | "container";
     containerName?: string;
     containerId?: string;
+    proxyToken?: string;
   },
 ): Promise<void> {
   const instanceDir = path.join(root, params.id);
@@ -54,6 +55,7 @@ async function writeInstance(
       `INSTANCE_PROFILE="${params.profile ?? `shared-${params.id}`}"`,
       `INSTANCE_BIND="${params.bind ?? "loopback"}"`,
       `INSTANCE_TEMPLATE="${params.template ?? "internal-test"}"`,
+      ...(params.proxyToken ? [`INSTANCE_PROXY_TOKEN="${params.proxyToken}"`] : []),
       ...(params.containerName ? [`INSTANCE_CONTAINER_NAME="${params.containerName}"`] : []),
       ...(params.containerId ? [`INSTANCE_CONTAINER_ID="${params.containerId}"`] : []),
       `INSTANCE_LOG_DIR="${logDir}"`,
@@ -90,6 +92,7 @@ async function startTestServer(params: {
       labels: Record<string, string>;
     }>
   >;
+  adminToken?: string;
 }) {
   const server = createSharedConsoleApiServer({
     config: {
@@ -98,6 +101,7 @@ async function startTestServer(params: {
       repoRoot: params.repoRoot ?? params.root,
       sharedInstancesRoot: params.root,
       dedicatedInstancesRoot: path.join(params.root, ".dedicated"),
+      adminToken: params.adminToken ?? null,
     },
     runOpsCommand: params.runOpsCommand,
     listDockerContainers: params.listDockerContainers,
@@ -909,6 +913,55 @@ describe("shared console api", () => {
       } finally {
         upstreamWss.close();
         await stopServer(upstreamServer);
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("validates admin mode and returns an instance token only for authorized requests", async () => {
+    await withTempInstancesRoot(async (root) => {
+      await writeInstance(root, {
+        id: "admin-token",
+        runtimeKind: "container",
+        containerName: "crewclaw-admin-token",
+        proxyToken: "instance-token-123",
+      });
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        adminToken: "console-admin-secret",
+      });
+
+      try {
+        const forbidden = await fetch(`${baseUrl}/api/admin/validate`);
+        expect(forbidden.status).toBe(403);
+
+        const validated = await fetch(`${baseUrl}/api/admin/validate`, {
+          headers: {
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+        });
+        expect(validated.status).toBe(200);
+        expect(await validated.json()).toEqual({
+          ok: true,
+          admin: true,
+        });
+
+        const tokenResponse = await fetch(`${baseUrl}/api/instances/admin-token/token`, {
+          headers: {
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+        });
+        expect(tokenResponse.status).toBe(200);
+        expect(await tokenResponse.json()).toEqual({
+          ok: true,
+          item: {
+            id: "admin-token",
+            pool: "shared",
+            token: "instance-token-123",
+          },
+        });
+      } finally {
         await stopServer(server);
       }
     });

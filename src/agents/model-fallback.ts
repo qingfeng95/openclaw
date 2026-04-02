@@ -1,7 +1,10 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
+  resolveAgentModelRotationConfig,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
@@ -39,6 +42,12 @@ import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 const log = createSubsystemLogger("model-fallback");
+const DEFAULT_ROTATION_STATE_FILE = "model-fallback-round-robin.json";
+const ROTATION_STATE_LOCKS = new Map<string, Promise<void>>();
+
+type RotationState = {
+  nextOffset?: number;
+};
 
 /**
  * Structured error thrown when all model fallback candidates have been
@@ -126,6 +135,91 @@ function createModelCandidateCollector(allowlist: Set<string> | null | undefined
   };
 
   return { candidates, addExplicitCandidate, addAllowlistedCandidate };
+}
+
+function resolveRotationStateFilePath(agentDir: string, configuredPath?: string): string {
+  const trimmed = configuredPath?.trim();
+  if (!trimmed) {
+    return path.join(agentDir, DEFAULT_ROTATION_STATE_FILE);
+  }
+  return path.isAbsolute(trimmed) ? trimmed : path.join(agentDir, trimmed);
+}
+
+async function readRotationState(statePath: string): Promise<RotationState> {
+  try {
+    const raw = await fs.readFile(statePath, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const nextOffset = Number.parseInt(String((parsed as RotationState).nextOffset ?? ""), 10);
+    return Number.isFinite(nextOffset) && nextOffset >= 0 ? { nextOffset } : {};
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return {};
+    }
+    throw error;
+  }
+}
+
+async function writeRotationState(statePath: string, nextOffset: number): Promise<void> {
+  await fs.mkdir(path.dirname(statePath), { recursive: true });
+  const tempPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, `${JSON.stringify({ nextOffset }, null, 2)}\n`, "utf8");
+  await fs.rename(tempPath, statePath);
+}
+
+async function withRotationStateLock<T>(statePath: string, run: () => Promise<T>): Promise<T> {
+  const prior = ROTATION_STATE_LOCKS.get(statePath) ?? Promise.resolve();
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = prior.then(() => gate);
+  ROTATION_STATE_LOCKS.set(statePath, pending);
+  try {
+    await prior;
+    return await run();
+  } finally {
+    release();
+    if (ROTATION_STATE_LOCKS.get(statePath) === pending) {
+      ROTATION_STATE_LOCKS.delete(statePath);
+    }
+  }
+}
+
+async function rotateModelCandidatesForRequest(params: {
+  cfg: OpenClawConfig | undefined;
+  agentDir?: string;
+  candidates: ModelCandidate[];
+  fallbacksOverride?: string[];
+}): Promise<ModelCandidate[]> {
+  if (params.candidates.length < 2 || params.fallbacksOverride !== undefined) {
+    return params.candidates;
+  }
+  const rotation = resolveAgentModelRotationConfig(params.cfg?.agents?.defaults?.model);
+  if (!rotation || (rotation.strategy && rotation.strategy !== "round-robin")) {
+    return params.candidates;
+  }
+  const agentDir = params.agentDir?.trim();
+  if (!agentDir) {
+    return params.candidates;
+  }
+  const statePath = resolveRotationStateFilePath(agentDir, rotation.stateFile);
+  return await withRotationStateLock(statePath, async () => {
+    const state = await readRotationState(statePath);
+    const currentOffset = (state.nextOffset ?? 0) % params.candidates.length;
+    const rotated =
+      currentOffset === 0
+        ? params.candidates
+        : [
+            ...params.candidates.slice(currentOffset),
+            ...params.candidates.slice(0, currentOffset),
+          ];
+    const nextOffset = (currentOffset + 1) % params.candidates.length;
+    await writeRotationState(statePath, nextOffset);
+    return rotated;
+  });
 }
 
 type ModelFallbackErrorHandler = (attempt: {
@@ -595,10 +689,16 @@ export async function runWithModelFallback<T>(params: {
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
 }): Promise<ModelFallbackRunResult<T>> {
-  const candidates = resolveFallbackCandidates({
+  const staticCandidates = resolveFallbackCandidates({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
+    fallbacksOverride: params.fallbacksOverride,
+  });
+  const candidates = await rotateModelCandidatesForRequest({
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    candidates: staticCandidates,
     fallbacksOverride: params.fallbacksOverride,
   });
   const authStore = params.cfg

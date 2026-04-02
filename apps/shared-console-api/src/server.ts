@@ -33,9 +33,9 @@ import {
 } from "./instances.ts";
 import {
   buildSharedConsoleModelChannelCatalog,
-  findSharedConsoleModelChannel,
   normalizeSharedConsoleModelChannelSettings,
   readSharedConsoleModelChannelSettings,
+  resolveSharedConsoleModelChannelTarget,
   resolveSharedConsoleModelChannelsPath,
   writeSharedConsoleInstanceModelConfig,
   writeSharedConsoleModelChannelSettings,
@@ -801,15 +801,15 @@ async function applyInstanceModelChannel(
   modelChannelId: string | null | undefined,
 ): Promise<SharedInstanceRecord> {
   const settings = await readSharedConsoleModelChannelSettings(config.modelChannelsPath);
-  const channel = findSharedConsoleModelChannel(settings, modelChannelId);
-  if (modelChannelId && !channel) {
+  const target = resolveSharedConsoleModelChannelTarget(settings, modelChannelId);
+  if (modelChannelId && !target) {
     throw new HttpError(400, `Model channel not found: ${modelChannelId}`);
   }
   await updateSharedInstanceEnvValues(resolveInstancesRoot(config, pool), id, {
-    INSTANCE_MODEL_CHANNEL_ID: channel?.id ?? null,
+    INSTANCE_MODEL_CHANNEL_ID: target?.id ?? null,
   });
   const instance = await ensureInstance(config, deps, pool, id, false);
-  await writeSharedConsoleInstanceModelConfig(instance, channel);
+  await writeSharedConsoleInstanceModelConfig(instance, target);
   return await ensureInstance(config, deps, pool, id, false);
 }
 
@@ -821,8 +821,8 @@ async function handleModelChannelsRequest(
 ): Promise<void> {
   const method = (req.method ?? "GET").toUpperCase();
   if (method === "GET") {
-    const settings = await readSharedConsoleModelChannelSettings(config.modelChannelsPath);
-    const admin = isAdminRequest(config, req);
+  const settings = await readSharedConsoleModelChannelSettings(config.modelChannelsPath);
+  const admin = isAdminRequest(config, req);
     sendJson(res, 200, {
       ok: true,
       admin,
@@ -841,7 +841,9 @@ async function handleModelChannelsRequest(
   const nextSettings = normalizeSharedConsoleModelChannelSettings(body.settings ?? body);
   const instances = await listAllCurrentInstances(config, deps);
   const inUseIds = [...new Set(instances.map((item) => item.modelChannelId).filter(Boolean))];
-  const missingIds = inUseIds.filter((channelId) => !findSharedConsoleModelChannel(nextSettings, channelId));
+  const missingIds = inUseIds.filter(
+    (channelId) => !resolveSharedConsoleModelChannelTarget(nextSettings, channelId),
+  );
   if (missingIds.length > 0) {
     throw new HttpError(
       400,
@@ -855,11 +857,11 @@ async function handleModelChannelsRequest(
     if (!item.modelChannelId) {
       continue;
     }
-    const channel = findSharedConsoleModelChannel(nextSettings, item.modelChannelId);
-    if (!channel) {
+    const target = resolveSharedConsoleModelChannelTarget(nextSettings, item.modelChannelId);
+    if (!target) {
       continue;
     }
-    await writeSharedConsoleInstanceModelConfig(item, channel);
+    await writeSharedConsoleInstanceModelConfig(item, target);
     affectedInstances.push({
       id: item.id,
       pool: item.paths.root === config.dedicatedInstancesRoot ? "dedicated" : "shared",

@@ -293,17 +293,18 @@ describe("shared console api", () => {
         expect(await publicResponse.json()).toEqual({
           ok: true,
           admin: false,
-          catalog: {
-            userCanConfigureModels: false,
-            channels: [
-              {
-                id: "openai-main",
-                name: "OpenAI Main",
-                providerId: "openai-main",
-                defaultModel: "openai-main/gpt-5-mini",
-              },
-            ],
-          },
+            catalog: {
+              userCanConfigureModels: false,
+              channels: [
+                {
+                  id: "openai-main",
+                  name: "OpenAI Main",
+                  kind: "channel",
+                  providerId: "openai-main",
+                  defaultModel: "openai-main/gpt-5-mini",
+                },
+              ],
+            },
         });
 
         const adminResponse = await fetch(`${baseUrl}/api/model-channels`, {
@@ -412,6 +413,131 @@ describe("shared console api", () => {
         });
         expect(configFile.agents.defaults).toMatchObject({
           model: "openai-main/gpt-5-mini",
+        });
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("creates instances with a mapped channel group and writes a rotating config", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const modelChannelsPath = path.join(root, "model-channels.json");
+      await fs.writeFile(
+        modelChannelsPath,
+        JSON.stringify(
+          {
+            userCanConfigureModels: false,
+            channels: [
+              {
+                id: "ice-a",
+                name: "ICE A",
+                providerId: "ice-a",
+                baseUrl: "https://ice-a.example/v1",
+                apiKey: "sk-a",
+                api: "openai-responses",
+                models: [
+                  {
+                    id: "gpt-5.4",
+                    name: "GPT-5.4",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 128000,
+                    maxTokens: 16000,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+                defaultModel: "ice-a/gpt-5.4",
+              },
+              {
+                id: "ice-b",
+                name: "ICE B",
+                providerId: "ice-b",
+                baseUrl: "https://ice-b.example/v1",
+                apiKey: "sk-b",
+                api: "openai-responses",
+                models: [
+                  {
+                    id: "gpt-5.4",
+                    name: "GPT-5.4",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 128000,
+                    maxTokens: 16000,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+                defaultModel: "ice-b/gpt-5.4",
+              },
+            ],
+            channelGroups: [
+              {
+                id: "ice-rr",
+                name: "ICE Round Robin",
+                strategy: "round-robin",
+                channelIds: ["ice-a", "ice-b"],
+              },
+            ],
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const invocations: OpsCommandInvocation[] = [];
+      const { server, baseUrl } = await startTestServer({
+        root,
+        modelChannelsPath,
+        runOpsCommand: async (invocation) => {
+          invocations.push(invocation);
+          if (invocation.scriptName === "create-instance.sh") {
+            await writeInstance(root, {
+              id: "round-robin",
+              name: "Round Robin",
+              port: 19129,
+            });
+          }
+          return {
+            exitCode: 0,
+            stdout: "ok",
+            stderr: "",
+          };
+        },
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/instances`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            id: "round-robin",
+            name: "Round Robin",
+            modelChannelId: "ice-rr",
+          }),
+        });
+
+        expect(response.status).toBe(201);
+        const payload = await response.json();
+        expect(payload.item.modelChannelId).toBe("ice-rr");
+        expect(invocations[0]?.scriptName).toBe("create-instance.sh");
+
+        const configFile = JSON.parse(
+          await fs.readFile(
+            path.join(root, "round-robin", "config", "openclaw.instance.json5"),
+            "utf8",
+          ),
+        );
+        expect(Object.keys(configFile.models.providers)).toEqual(["ice-a", "ice-b"]);
+        expect(configFile.agents.defaults.model).toEqual({
+          primary: "ice-a/gpt-5.4",
+          fallbacks: ["ice-b/gpt-5.4"],
+          rotation: {
+            strategy: "round-robin",
+            stateFile: "shared-console-model-rotation.json",
+          },
         });
       } finally {
         await stopServer(server);

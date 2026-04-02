@@ -34,15 +34,43 @@ export type SharedConsoleModelChannel = {
   pdfModel?: string;
 };
 
-export type SharedConsoleModelChannelCatalogItem = Pick<
-  SharedConsoleModelChannel,
-  "id" | "name" | "providerId" | "defaultModel"
->;
+export type SharedConsoleModelChannelGroup = {
+  id: string;
+  name: string;
+  channelIds: string[];
+  strategy: "round-robin";
+};
+
+export type SharedConsoleModelChannelCatalogItem = {
+  id: string;
+  name: string;
+  kind: "channel" | "group";
+  providerId?: string;
+  defaultModel?: string;
+  channelCount?: number;
+  strategy?: "round-robin";
+};
 
 export type SharedConsoleModelChannelSettings = {
   userCanConfigureModels: boolean;
   channels: SharedConsoleModelChannel[];
+  channelGroups: SharedConsoleModelChannelGroup[];
 };
+
+export type SharedConsoleModelChannelTarget =
+  | {
+      kind: "channel";
+      id: string;
+      name: string;
+      channel: SharedConsoleModelChannel;
+    }
+  | {
+      kind: "group";
+      id: string;
+      name: string;
+      group: SharedConsoleModelChannelGroup;
+      channels: SharedConsoleModelChannel[];
+    };
 
 const DEFAULT_ALLOWED_PATH_PREFIXES = ["./", ".\\\\", "tmp/", "tmp\\\\", "./tmp/", ".\\\\tmp\\\\"];
 const SAFE_CHANNEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -235,10 +263,46 @@ function normalizeChannel(value: unknown, index: number): SharedConsoleModelChan
   };
 }
 
+function normalizeChannelGroup(
+  value: unknown,
+  index: number,
+): SharedConsoleModelChannelGroup {
+  if (!isObject(value)) {
+    throw new Error(`channelGroups[${index}] must be an object.`);
+  }
+  const id = normalizeString(value.id, `channelGroups[${index}].id`, { required: true });
+  if (!SAFE_CHANNEL_ID.test(id)) {
+    throw new Error(`channelGroups[${index}].id is invalid: ${id}`);
+  }
+  const rawChannelIds = Array.isArray(value.channelIds)
+    ? value.channelIds.map((entry) => normalizeString(entry, `channelGroups[${index}].channelIds[]`))
+    : [];
+  const channelIds = [...new Set(rawChannelIds.filter(Boolean))];
+  if (channelIds.length === 0) {
+    throw new Error(`channelGroups[${index}].channelIds must contain at least one channel id.`);
+  }
+  for (const channelId of channelIds) {
+    if (!SAFE_CHANNEL_ID.test(channelId)) {
+      throw new Error(`channelGroups[${index}].channelIds contains invalid id: ${channelId}`);
+    }
+  }
+  const strategyRaw = normalizeString(value.strategy, `channelGroups[${index}].strategy`);
+  if (strategyRaw && strategyRaw !== "round-robin") {
+    throw new Error(`channelGroups[${index}].strategy must be "round-robin".`);
+  }
+  return {
+    id,
+    name: normalizeString(value.name, `channelGroups[${index}].name`) || id,
+    channelIds,
+    strategy: "round-robin",
+  };
+}
+
 export function getDefaultSharedConsoleModelChannelSettings(): SharedConsoleModelChannelSettings {
   return {
     userCanConfigureModels: false,
     channels: [],
+    channelGroups: [],
   };
 }
 
@@ -252,15 +316,38 @@ export function normalizeSharedConsoleModelChannelSettings(
     ? value.channels.map((entry, index) => normalizeChannel(entry, index))
     : [];
   const uniqueIds = new Set<string>();
+  const providerIds = new Set<string>();
   for (const channel of channels) {
     if (uniqueIds.has(channel.id)) {
       throw new Error(`Duplicate channel id: ${channel.id}`);
     }
     uniqueIds.add(channel.id);
+    if (providerIds.has(channel.providerId)) {
+      throw new Error(`Duplicate channel providerId: ${channel.providerId}`);
+    }
+    providerIds.add(channel.providerId);
+  }
+  const channelGroups = Array.isArray(value.channelGroups)
+    ? value.channelGroups.map((entry, index) => normalizeChannelGroup(entry, index))
+    : [];
+  for (const group of channelGroups) {
+    if (uniqueIds.has(group.id)) {
+      throw new Error(`Duplicate channel or group id: ${group.id}`);
+    }
+    uniqueIds.add(group.id);
+    const missingChannelIds = group.channelIds.filter(
+      (channelId) => !channels.some((channel) => channel.id === channelId),
+    );
+    if (missingChannelIds.length > 0) {
+      throw new Error(
+        `channelGroups[${group.id}].channelIds references unknown channels: ${missingChannelIds.join(", ")}`,
+      );
+    }
   }
   return {
     userCanConfigureModels: normalizeBoolean(value.userCanConfigureModels, false),
     channels,
+    channelGroups,
   };
 }
 
@@ -297,15 +384,40 @@ export async function writeSharedConsoleModelChannelSettings(
   await fs.writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
 }
 
-export function findSharedConsoleModelChannel(
+export function resolveSharedConsoleModelChannelTarget(
   settings: SharedConsoleModelChannelSettings,
   channelId: string | null | undefined,
-): SharedConsoleModelChannel | null {
+): SharedConsoleModelChannelTarget | null {
   const normalizedId = typeof channelId === "string" ? channelId.trim() : "";
   if (!normalizedId) {
     return null;
   }
-  return settings.channels.find((channel) => channel.id === normalizedId) ?? null;
+  const channel = settings.channels.find((item) => item.id === normalizedId) ?? null;
+  if (channel) {
+    return {
+      kind: "channel",
+      id: channel.id,
+      name: channel.name,
+      channel,
+    };
+  }
+  const group = settings.channelGroups.find((item) => item.id === normalizedId) ?? null;
+  if (!group) {
+    return null;
+  }
+  const channels = group.channelIds
+    .map((channelRef) => settings.channels.find((item) => item.id === channelRef) ?? null)
+    .filter((item): item is SharedConsoleModelChannel => Boolean(item));
+  if (channels.length === 0) {
+    return null;
+  }
+  return {
+    kind: "group",
+    id: group.id,
+    name: group.name,
+    group,
+    channels,
+  };
 }
 
 export function buildSharedConsoleModelChannelCatalog(
@@ -313,12 +425,26 @@ export function buildSharedConsoleModelChannelCatalog(
 ): { userCanConfigureModels: boolean; channels: SharedConsoleModelChannelCatalogItem[] } {
   return {
     userCanConfigureModels: settings.userCanConfigureModels,
-    channels: settings.channels.map((channel) => ({
-      id: channel.id,
-      name: channel.name,
-      providerId: channel.providerId,
-      defaultModel: channel.defaultModel,
-    })),
+    channels: [
+      ...settings.channels.map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+        kind: "channel" as const,
+        providerId: channel.providerId,
+        defaultModel: channel.defaultModel,
+      })),
+      ...settings.channelGroups.map((group) => {
+        const firstChannel = settings.channels.find((channel) => channel.id === group.channelIds[0]);
+        return {
+          id: group.id,
+          name: group.name,
+          kind: "group" as const,
+          defaultModel: firstChannel?.defaultModel,
+          channelCount: group.channelIds.length,
+          strategy: group.strategy,
+        };
+      }),
+    ],
   };
 }
 
@@ -350,7 +476,7 @@ function buildBaseInstanceConfig(instance: SharedInstanceRecord): Record<string,
   };
 }
 
-function buildChannelInstanceConfig(
+function buildSingleChannelInstanceConfig(
   instance: SharedInstanceRecord,
   channel: SharedConsoleModelChannel | null,
 ): Record<string, unknown> {
@@ -383,16 +509,97 @@ function buildChannelInstanceConfig(
   };
 }
 
+function buildGroupInstanceConfig(
+  instance: SharedInstanceRecord,
+  target: Extract<SharedConsoleModelChannelTarget, { kind: "group" }>,
+): Record<string, unknown> {
+  const base = buildBaseInstanceConfig(instance);
+  const providers = Object.fromEntries(
+    target.channels.map((channel) => [
+      channel.providerId,
+      {
+        baseUrl: channel.baseUrl,
+        ...(channel.apiKey ? { apiKey: channel.apiKey } : {}),
+        ...(channel.auth ? { auth: channel.auth } : {}),
+        ...(channel.api ? { api: channel.api } : {}),
+        ...(channel.headers ? { headers: channel.headers } : {}),
+        models: channel.models,
+      },
+    ]),
+  );
+  const defaultModels = target.channels.map((channel) => channel.defaultModel);
+  const imageModels = target.channels
+    .map((channel) => channel.imageModel)
+    .filter((value): value is string => Boolean(value));
+  const imageGenerationModels = target.channels
+    .map((channel) => channel.imageGenerationModel)
+    .filter((value): value is string => Boolean(value));
+  const pdfModels = target.channels
+    .map((channel) => channel.pdfModel)
+    .filter((value): value is string => Boolean(value));
+  const [primaryModel, ...fallbackModels] = defaultModels;
+  const modelConfig: Record<string, unknown> = {
+    primary: primaryModel,
+    ...(fallbackModels.length > 0 ? { fallbacks: fallbackModels } : {}),
+    rotation: {
+      strategy: target.group.strategy,
+      stateFile: "shared-console-model-rotation.json",
+    },
+  };
+
+  return {
+    ...base,
+    models: {
+      providers,
+    },
+    agents: {
+      defaults: {
+        model: modelConfig,
+        ...(imageModels.length > 0
+          ? {
+              imageModel: {
+                primary: imageModels[0],
+                ...(imageModels.length > 1 ? { fallbacks: imageModels.slice(1) } : {}),
+              },
+            }
+          : {}),
+        ...(imageGenerationModels.length > 0
+          ? {
+              imageGenerationModel: {
+                primary: imageGenerationModels[0],
+                ...(imageGenerationModels.length > 1
+                  ? { fallbacks: imageGenerationModels.slice(1) }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(pdfModels.length > 0
+          ? {
+              pdfModel: {
+                primary: pdfModels[0],
+                ...(pdfModels.length > 1 ? { fallbacks: pdfModels.slice(1) } : {}),
+              },
+            }
+          : {}),
+      },
+    },
+  };
+}
+
 export async function writeSharedConsoleInstanceModelConfig(
   instance: SharedInstanceRecord,
-  channel: SharedConsoleModelChannel | null,
+  target: SharedConsoleModelChannelTarget | null,
 ): Promise<void> {
   const configPath =
     instance.paths.configPath || path.join(instance.paths.dir, "config", "openclaw.instance.json5");
   await fs.mkdir(path.dirname(configPath), { recursive: true });
+  const config =
+    !target || target.kind === "channel"
+      ? buildSingleChannelInstanceConfig(instance, target?.channel ?? null)
+      : buildGroupInstanceConfig(instance, target);
   await fs.writeFile(
     configPath,
-    `${JSON.stringify(buildChannelInstanceConfig(instance, channel), null, 2)}\n`,
+    `${JSON.stringify(config, null, 2)}\n`,
     "utf8",
   );
 }

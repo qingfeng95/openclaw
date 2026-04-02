@@ -114,6 +114,7 @@ function defaultModelChannelSettings() {
   return {
     userCanConfigureModels: false,
     channels: [],
+    channelGroups: [],
   };
 }
 
@@ -125,8 +126,14 @@ function ensureModelChannelCatalogShape(payload) {
       .map((item) => ({
         id: String(item?.id || "").trim(),
         name: String(item?.name || item?.id || "").trim(),
+        kind: item?.kind === "group" ? "group" : "channel",
         providerId: String(item?.providerId || "").trim(),
         defaultModel: String(item?.defaultModel || "").trim(),
+        channelCount:
+          typeof item?.channelCount === "number" && Number.isFinite(item.channelCount)
+            ? item.channelCount
+            : null,
+        strategy: item?.strategy === "round-robin" ? "round-robin" : "",
       }))
       .filter((item) => item.id),
   };
@@ -136,6 +143,7 @@ function normalizeModelChannelSettingsForEditor(value) {
   return {
     userCanConfigureModels: Boolean(value?.userCanConfigureModels),
     channels: Array.isArray(value?.channels) ? value.channels : [],
+    channelGroups: Array.isArray(value?.channelGroups) ? value.channelGroups : [],
   };
 }
 
@@ -149,6 +157,10 @@ function formatModelChannelLabel(channelId) {
     return `${normalized}（已不存在）`;
   }
   const suffix = match.defaultModel ? ` · ${match.defaultModel}` : "";
+  if (match.kind === "group") {
+    const countLabel = match.channelCount ? ` · ${match.channelCount} 个渠道轮询` : " · 轮询组";
+    return `${match.name || match.id}${countLabel}${suffix}`;
+  }
   return `${match.name || match.id}${suffix}`;
 }
 
@@ -2251,15 +2263,15 @@ loadModelChannelConfig = function ({ announce = false } = {}) {
       state.modelChannelSettings = null;
       state.modelChannelSettingsText = "";
     }
-    if (announce) {
-      pushStatus(
-        "info",
-        "Model channels loaded",
-        `${state.modelChannelCatalog.channels.length} channels, user model config ${
-          state.modelChannelCatalog.userCanConfigureModels ? "enabled" : "disabled"
-        }`,
-      );
-    }
+      if (announce) {
+        pushStatus(
+          "info",
+          "Model channels loaded",
+          `${state.modelChannelCatalog.channels.length} channel routes, user model config ${
+            state.modelChannelCatalog.userCanConfigureModels ? "enabled" : "disabled"
+          }`,
+        );
+      }
     return payload;
   })();
 };
@@ -2318,7 +2330,7 @@ renderModelChannelsPanel = function () {
   }
   elements.modelChannelsPanel.textContent = `Global channels: ${state.modelChannelCatalog.channels.length}. User model config: ${
     state.modelChannelCatalog.userCanConfigureModels ? "enabled" : "disabled"
-  }. Saving will rewrite mapped instance configs; running instances need restart to take effect.`;
+  }. Saving will rewrite mapped instance configs; running mapped instances need restart to pick up route changes.`;
 };
 
 renderMetaGrid = function (item) {

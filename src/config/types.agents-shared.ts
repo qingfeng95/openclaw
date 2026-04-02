@@ -5,6 +5,13 @@ import type {
   SandboxSshSettings,
 } from "./types.sandbox.js";
 
+export type AgentModelRotationConfig = {
+  /** Rotate the candidate chain on each request before attempting the primary model. */
+  strategy?: "round-robin";
+  /** Optional state file used to persist the next candidate offset. Relative paths resolve from agentDir. */
+  stateFile?: string;
+};
+
 export type AgentModelConfig =
   | string
   | {
@@ -12,6 +19,8 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /** Optional request-time rotation for the primary+fallback chain. */
+      rotation?: AgentModelRotationConfig;
     };
 
 export type AgentSandboxConfig = {

@@ -26,6 +26,24 @@ function makeFallbacksOnlyCfg(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function makeRotatingCfg(models: string[]): OpenClawConfig {
+  const [primary, ...fallbacks] = models;
+  return makeCfg({
+    agents: {
+      defaults: {
+        model: {
+          primary,
+          fallbacks,
+          rotation: {
+            strategy: "round-robin",
+            stateFile: ".rotation/request-model.json",
+          },
+        },
+      },
+    },
+  });
+}
+
 function makeProviderFallbackCfg(provider: string): OpenClawConfig {
   return makeCfg({
     agents: {
@@ -204,6 +222,125 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith("openai", "gpt-5.4");
+  });
+
+  it("rotates the candidate chain on each request when round-robin rotation is configured", async () => {
+    const cfg = makeRotatingCfg([
+      "openai/gpt-5.4",
+      "anthropic/claude-sonnet-4-6",
+      "google/gemini-3.1-pro-preview",
+    ]);
+
+    await withTempAuthStore(
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {},
+      },
+      async (tempDir) => {
+        const calls: string[] = [];
+        const run = vi.fn().mockImplementation(async (provider, model) => {
+          calls.push(`${provider}/${model}`);
+          return "ok";
+        });
+
+        await runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-5.4",
+          agentDir: tempDir,
+          run,
+        });
+        await runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-5.4",
+          agentDir: tempDir,
+          run,
+        });
+        await runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-5.4",
+          agentDir: tempDir,
+          run,
+        });
+        await runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-5.4",
+          agentDir: tempDir,
+          run,
+        });
+
+        expect(calls).toEqual([
+          "openai/gpt-5.4",
+          "anthropic/claude-sonnet-4-6",
+          "google/gemini-3.1-pro-preview",
+          "openai/gpt-5.4",
+        ]);
+      },
+    );
+  });
+
+  it("preserves rotated fallback order after the request-specific primary candidate", async () => {
+    const cfg = makeRotatingCfg([
+      "openai/gpt-5.4",
+      "anthropic/claude-sonnet-4-6",
+      "google/gemini-3.1-pro-preview",
+    ]);
+
+    await withTempAuthStore(
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {},
+      },
+      async (tempDir) => {
+        await runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-5.4",
+          agentDir: tempDir,
+          run: async () => "ok",
+        });
+
+        const calls: string[] = [];
+        const run = vi.fn().mockImplementation(async (provider, model) => {
+          const ref = `${provider}/${model}`;
+          calls.push(ref);
+          if (ref === "anthropic/claude-sonnet-4-6") {
+            throw Object.assign(new Error("rate limited"), { status: 429 });
+          }
+          return "ok";
+        });
+
+        const result = await runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-5.4",
+          agentDir: tempDir,
+          run,
+        });
+
+        expect(result.provider).toBe("google");
+        expect(result.model).toBe("gemini-3.1-pro-preview");
+        expect(calls).toEqual(["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"]);
+
+        calls.length = 0;
+
+        await runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-5.4",
+          agentDir: tempDir,
+          run: async (provider, model) => {
+            calls.push(`${provider}/${model}`);
+            return "ok";
+          },
+        });
+
+        expect(calls).toEqual(["google/gemini-3.1-pro-preview"]);
+      },
+    );
   });
 
   it("falls back on unrecognized errors when candidates remain", async () => {

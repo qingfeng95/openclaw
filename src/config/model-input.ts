@@ -1,4 +1,4 @@
-import type { AgentModelConfig } from "./types.agents-shared.js";
+import type { AgentModelConfig, AgentModelRotationConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
   primary?: string;
@@ -22,6 +22,15 @@ export function resolveAgentModelFallbackValues(model?: AgentModelConfig): strin
     return [];
   }
   return Array.isArray(model.fallbacks) ? model.fallbacks : [];
+}
+
+export function resolveAgentModelRotationConfig(
+  model?: AgentModelConfig,
+): AgentModelRotationConfig | undefined {
+  if (!model || typeof model !== "object") {
+    return undefined;
+  }
+  return model.rotation;
 }
 
 export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLike | undefined {

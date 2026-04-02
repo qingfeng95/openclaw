@@ -57,6 +57,8 @@ const elements = {
   renameForm: document.querySelector("#rename-form"),
   renameInput: document.querySelector("#rename-input"),
   openUiButton: document.querySelector("#open-ui-button"),
+  copyUiLinkButton: document.querySelector("#copy-ui-link-button"),
+  copyLoginGuideButton: document.querySelector("#copy-login-guide-button"),
   copyTokenButton: document.querySelector("#copy-token-button"),
   startButton: document.querySelector("#start-button"),
   stopButton: document.querySelector("#stop-button"),
@@ -148,6 +150,9 @@ function updateAdminModeUi() {
     if (elements.copyTokenButton) {
       elements.copyTokenButton.classList.add("hidden");
     }
+    if (elements.copyLoginGuideButton) {
+      elements.copyLoginGuideButton.classList.add("hidden");
+    }
     return;
   }
   elements.adminTokenInput.disabled = false;
@@ -158,6 +163,9 @@ function updateAdminModeUi() {
     : "当前未进入管理员模式。";
   if (elements.copyTokenButton) {
     elements.copyTokenButton.classList.toggle("hidden", !isAdminModeEnabled() || !state.selectedItem);
+  }
+  if (elements.copyLoginGuideButton) {
+    elements.copyLoginGuideButton.classList.toggle("hidden", !isAdminModeEnabled() || !state.selectedItem);
   }
 }
 
@@ -496,6 +504,15 @@ function resolveInstanceUiUrl(scope, id) {
   } catch {
     return joinApiUrl(state.apiBase || "", proxyPath);
   }
+}
+
+async function copyText(text, promptTitle) {
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+  window.prompt(promptTitle, text);
+  return false;
 }
 
 function canOpenInstanceUi(item) {
@@ -1160,6 +1177,13 @@ function renderDetail() {
       elements.copyTokenButton.classList.add("hidden");
       elements.copyTokenButton.disabled = true;
     }
+    if (elements.copyUiLinkButton) {
+      elements.copyUiLinkButton.disabled = true;
+    }
+    if (elements.copyLoginGuideButton) {
+      elements.copyLoginGuideButton.classList.add("hidden");
+      elements.copyLoginGuideButton.disabled = true;
+    }
     updateAdminModeUi();
     return;
   }
@@ -1174,9 +1198,20 @@ function renderDetail() {
         ? "通过 Shared Console 代理打开容器内实例 UI"
         : "通过 Shared Console 代理打开实例 UI";
   }
+  if (elements.copyUiLinkButton) {
+    elements.copyUiLinkButton.disabled = !canOpenInstanceUi(item);
+    elements.copyUiLinkButton.title =
+      instanceRuntimeLocation(item) === "container"
+        ? "复制该实例经 Shared Console 代理的 UI 地址"
+        : "复制该实例经 Shared Console 代理的 UI 地址";
+  }
   if (elements.copyTokenButton) {
     elements.copyTokenButton.disabled = !isAdminModeEnabled();
     elements.copyTokenButton.classList.toggle("hidden", !isAdminModeEnabled());
+  }
+  if (elements.copyLoginGuideButton) {
+    elements.copyLoginGuideButton.disabled = !isAdminModeEnabled() || !canOpenInstanceUi(item);
+    elements.copyLoginGuideButton.classList.toggle("hidden", !isAdminModeEnabled());
   }
   renderMetaGrid(item);
   renderProbeGrid(item);
@@ -1346,6 +1381,19 @@ function openSelectedInstanceUi() {
   pushStatus("info", `已打开 ${state.selectedId} UI`, url);
 }
 
+async function copySelectedInstanceUiLink() {
+  if (!state.selectedItem || !state.selectedId) {
+    return;
+  }
+  if (!canOpenInstanceUi(state.selectedItem)) {
+    pushStatus("error", "复制 UI 链接失败", "实例尚未运行，先启动实例再复制 UI 链接。");
+    return;
+  }
+  const url = resolveInstanceUiUrl(state.selectedScope, state.selectedId);
+  const copied = await copyText(url, `复制 ${state.selectedId} UI 链接`);
+  pushStatus(copied ? "success" : "info", `已复制 ${state.selectedId} UI 链接`, url);
+}
+
 async function enableAdminMode() {
   if (!state.adminModeAvailable) {
     pushStatus("error", "管理员模式不可用", "当前服务器未启用管理员模式。");
@@ -1388,13 +1436,44 @@ async function copySelectedInstanceToken() {
   if (typeof token !== "string" || !token) {
     throw new Error("当前实例没有可复制的 Token。");
   }
-  if (navigator?.clipboard?.writeText) {
-    await navigator.clipboard.writeText(token);
-    pushStatus("success", `已复制 ${state.selectedId} Token`);
+  const copied = await copyText(token, `复制 ${state.selectedId} Token`);
+  pushStatus(copied ? "success" : "info", copied ? `已复制 ${state.selectedId} Token` : `已显示 ${state.selectedId} Token`);
+}
+
+async function copySelectedInstanceLoginGuide() {
+  if (!state.selectedItem || !state.selectedId) {
     return;
   }
-  window.prompt(`复制 ${state.selectedId} Token`, token);
-  pushStatus("info", `已显示 ${state.selectedId} Token`);
+  if (!isAdminModeEnabled()) {
+    pushStatus("error", "复制登录说明失败", "请先进入管理员模式。");
+    return;
+  }
+  if (!canOpenInstanceUi(state.selectedItem)) {
+    pushStatus("error", "复制登录说明失败", "实例尚未运行，先启动实例再复制登录说明。");
+    return;
+  }
+  const payload = await fetchJson(`${instanceApiBase(state.selectedScope)}/${encodeURIComponent(state.selectedId)}/token`, {
+    adminAuth: true,
+  });
+  const token = payload?.item?.token;
+  if (typeof token !== "string" || !token) {
+    throw new Error("当前实例没有可复制的 Token。");
+  }
+  const uiUrl = resolveInstanceUiUrl(state.selectedScope, state.selectedId);
+  const guide = [
+    `实例：${state.selectedItem.name || state.selectedId}`,
+    `实例 ID：${state.selectedId}`,
+    `UI 地址：${uiUrl}`,
+    `登录 Token：${token}`,
+    "",
+    "使用步骤：",
+    "1. 打开上面的 UI 地址。",
+    "2. 如果页面先要求站点账号密码，先完成站点登录；若你没有这组账号密码，请向管理员索取。",
+    "3. 进入页面右上角 Control UI 设置。",
+    "4. 把上面的登录 Token 粘贴进去，再点击连接。",
+  ].join("\n");
+  const copied = await copyText(guide, `复制 ${state.selectedId} 登录说明`);
+  pushStatus(copied ? "success" : "info", `已复制 ${state.selectedId} 登录说明`);
 }
 
 async function loadContainerLogs(containerName, { announce = true } = {}) {
@@ -1688,6 +1767,16 @@ function bindEvents() {
   });
   elements.openUiButton.addEventListener("click", () => {
     openSelectedInstanceUi();
+  });
+  elements.copyUiLinkButton.addEventListener("click", () => {
+    void copySelectedInstanceUiLink().catch((error) => {
+      pushStatus("error", "复制 UI 链接失败", error.message);
+    });
+  });
+  elements.copyLoginGuideButton.addEventListener("click", () => {
+    void copySelectedInstanceLoginGuide().catch((error) => {
+      pushStatus("error", "复制登录说明失败", error.message);
+    });
   });
   elements.copyTokenButton.addEventListener("click", () => {
     void copySelectedInstanceToken().catch((error) => {

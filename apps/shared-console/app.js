@@ -36,6 +36,9 @@ const elements = {
   containerLogsPanel: document.querySelector("#container-logs-panel"),
   createContainerForm: document.querySelector("#create-container-form"),
   containerNameOptions: document.querySelector("#container-name-options"),
+  createPoolSelect: document.querySelector("#create-pool-select"),
+  createRuntimeKindSelect: document.querySelector("#create-runtime-kind-select"),
+  createRuntimeKindNote: document.querySelector("#create-runtime-kind-note"),
   filterInput: document.querySelector("#instance-filter-input"),
   instancesList: document.querySelector("#instances-list"),
   dedicatedInstancesList: document.querySelector("#dedicated-instances-list"),
@@ -750,6 +753,27 @@ function renderContainerNameOptions() {
     .join("");
 }
 
+function syncCreateFormConstraints() {
+  const pool = elements.createPoolSelect?.value === "dedicated" ? "dedicated" : "shared";
+  if (!elements.createRuntimeKindSelect) {
+    return;
+  }
+  if (pool === "shared") {
+    elements.createRuntimeKindSelect.value = "container";
+    elements.createRuntimeKindSelect.disabled = true;
+    if (elements.createRuntimeKindNote) {
+      elements.createRuntimeKindNote.textContent =
+        "共享实例固定运行在已有容器里，多个共享实例可绑定到同一个容器。";
+    }
+    return;
+  }
+  elements.createRuntimeKindSelect.disabled = false;
+  if (elements.createRuntimeKindNote) {
+    elements.createRuntimeKindNote.textContent =
+      "单独实例可按需选择已有容器或宿主机运行。";
+  }
+}
+
 function renderContainerLogs() {
   const selectedContainer = state.selectedContainerName ? findContainerByName(state.selectedContainerName) : null;
   if (!state.selectedContainerName) {
@@ -1233,7 +1257,9 @@ async function handleCreateSubmit(event) {
     ),
   );
   const pool = body.pool === "dedicated" ? "dedicated" : "shared";
-  const runtimeKind = body.runtimeKind === "container" ? "container" : "host";
+  const runtimeKind =
+    pool === "shared" ? "container" : body.runtimeKind === "container" ? "container" : "host";
+  body.runtimeKind = runtimeKind;
   if (runtimeKind === "container" && !String(body.containerName || "").trim() && !String(body.containerId || "").trim()) {
     pushStatus("error", "新增实例失败", "部署位置选了已有容器时，至少要填写目标容器名或容器 ID。");
     return;
@@ -1251,6 +1277,7 @@ async function handleCreateSubmit(event) {
       payload.command?.stdout || "实例已写入",
     );
     event.currentTarget.reset();
+    syncCreateFormConstraints();
     state.selectedScope = pool;
     state.selectedId = payload.item?.id ?? null;
     await loadInstances({ preserveSelection: false });
@@ -1421,6 +1448,9 @@ function bindEvents() {
     state.filter = event.currentTarget.value;
     renderInstancesList();
   });
+  elements.createPoolSelect.addEventListener("change", () => {
+    syncCreateFormConstraints();
+  });
   bindInstanceSelection(elements.instancesList, "加载实例详情失败");
   bindInstanceSelection(elements.watchlistPanel, "加载关注实例失败");
   bindInstanceSelection(elements.dedicatedInstancesList, "加载单独实例详情失败");
@@ -1442,6 +1472,11 @@ function bindEvents() {
   });
   elements.createForm.addEventListener("submit", (event) => {
     void handleCreateSubmit(event);
+  });
+  elements.createForm.addEventListener("reset", () => {
+    window.setTimeout(() => {
+      syncCreateFormConstraints();
+    }, 0);
   });
   elements.createContainerForm.addEventListener("submit", (event) => {
     void handleCreateContainerSubmit(event);
@@ -1486,6 +1521,7 @@ async function init() {
   elements.autoRefreshCheckbox.checked = localStorage.getItem(AUTO_REFRESH_STORAGE_KEY) === "1";
   elements.statusFeed.innerHTML = "";
   bindEvents();
+  syncCreateFormConstraints();
   configureAutoRefresh(elements.autoRefreshCheckbox.checked);
   pushStatus("info", "值班台已启动", `API ${state.apiBase}`);
   await loadInstances({ preserveSelection: true });

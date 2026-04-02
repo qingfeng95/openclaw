@@ -183,17 +183,20 @@
           <form id="create-form" class="form-grid">
             <label class="field">
               <span>实例类型</span>
-              <select name="pool">
+              <select id="create-pool-select" name="pool">
                 <option value="shared">共享实例</option>
                 <option value="dedicated">单独实例</option>
               </select>
             </label>
             <label class="field">
               <span>部署位置</span>
-              <select name="runtimeKind">
+              <select id="create-runtime-kind-select" name="runtimeKind">
+                <option value="container" selected>已有容器</option>
                 <option value="host">宿主机运行</option>
-                <option value="container">已有容器</option>
               </select>
+              <small id="create-runtime-kind-note" class="field-note">
+                共享实例固定运行在已有容器里；单独实例可按需选择容器或宿主机。
+              </small>
             </label>
             <label class="field">
               <span>实例 ID</span>
@@ -234,7 +237,8 @@
             </div>
           </form>
           <div class="callout">
-            正确顺序是：先在上面的“创建容器”区域预创建容器，再在这里把部署位置选成“已有容器”，并绑定到目标容器名。
+            共享实例的产品语义是多个实例共享同一个容器资源，因此共享实例固定走“已有容器”。
+            正确顺序是：先在上面的“创建容器”区域预创建容器，再在这里绑定到目标容器名。
             目标容器名称输入框会列出当前已发现的容器。
             这类实例不会按宿主机方式启动，后续会通过容器侧链路接管。
           </div>

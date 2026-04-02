@@ -224,6 +224,21 @@ body {
   font: inherit;
 }
 
+.field select {
+  color-scheme: normal;
+}
+
+.field select option {
+  color: #0a1624;
+  background: #f4f8fc;
+}
+
+.field select option:checked,
+.field select option:hover {
+  color: #0a1624;
+  background: #dce8f5;
+}
+
 .field {
   display: grid;
   gap: 8px;
@@ -232,6 +247,12 @@ body {
 .field span {
   color: var(--text-soft);
   font-size: 13px;
+}
+
+.field-note {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .inline-actions {

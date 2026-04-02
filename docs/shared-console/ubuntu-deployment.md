@@ -71,7 +71,7 @@ container-managed 实例要正常工作，宿主机实例目录和容器内实�
 Ubuntu 上建议至少设置：
 
 ```bash
-export SHARED_CONSOLE_API_HOST=0.0.0.0
+export SHARED_CONSOLE_API_HOST=127.0.0.1
 export SHARED_CONSOLE_API_PORT=43100
 export SHARED_CONSOLE_API_INSTANCES_ROOT=/www/openclaw/shared-instances
 export SHARED_CONSOLE_API_DEDICATED_INSTANCES_ROOT=/www/openclaw/dedicated-instances
@@ -85,6 +85,9 @@ export SHARED_CONSOLE_API_PROBE_TIMEOUT_MS=1500
 export OPENCLAW_CONTAINER_REPO_ROOT=/www/openclaw/repo
 export OPENCLAW_CONTAINER_SHARED_INSTANCES_ROOT=/www/openclaw/shared-instances
 export OPENCLAW_CONTAINER_DEDICATED_INSTANCES_ROOT=/www/openclaw/dedicated-instances
+export SHARED_CONSOLE_HOST=127.0.0.1
+export SHARED_CONSOLE_PORT=43101
+export SHARED_CONSOLE_API_BASE=http://<public-host>:43102/api
 ```
 
 如使用 systemd，可以直接基于仓库内模板安装：
@@ -116,6 +119,35 @@ pnpm shared-console-api:dev
 - 当前 Ubuntu 宿主机上的 `shared-console-api` 运行账号有权限执行 `docker exec`
 
 如果不满足这些条件，container-managed 实例不会稳定工作。
+
+## 反向代理与访问控制
+
+生产或长期联调时，推荐把 `shared-console-api` 和 `shared-console-web` 都只绑定到 `127.0.0.1`，再由单独的反向代理对外暴露。
+
+仓库内提供了一个 Nginx 示例：
+
+- `ops/nginx/shared-console-proxy.conf.example`
+
+这个示例默认：
+
+- 公网入口监听 `43102`
+- `/api/` 代理到 `127.0.0.1:43100`
+- `/` 代理到 `127.0.0.1:43101`
+- 全站启用 Basic Auth
+
+典型步骤：
+
+1. 安装 Nginx
+2. 把 systemd 环境文件中的：
+   - `SHARED_CONSOLE_API_HOST`
+   - `SHARED_CONSOLE_HOST`
+   改为 `127.0.0.1`
+3. 把 `SHARED_CONSOLE_API_BASE` 改成对外可访问的代理地址，例如 `http://223.254.144.141:43102/api`
+4. 把示例配置复制到 `/etc/nginx/conf.d/shared-console.conf`
+5. 创建 `auth_basic_user_file` 指向的密码文件
+6. `nginx -t && systemctl reload nginx`
+
+如果宿主机上 80/443 已被其他项目占用，不要抢占旧端口；直接让 Shared Console 代理监听单独端口即可。
 
 ## 实例行为约定
 

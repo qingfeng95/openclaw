@@ -420,6 +420,176 @@ describe("shared console api", () => {
     });
   });
 
+  it("generates model channel draft settings from simple admin inputs", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const { server, baseUrl } = await startTestServer({
+        root,
+        adminToken: "console-admin-secret",
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/model-channels/generate`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+          body: JSON.stringify({
+            settings: {
+              userCanConfigureModels: false,
+              channels: [],
+              channelGroups: [],
+            },
+            generator: {
+              baseUrl: "https://ice.v.ua/v1",
+              apiKeys: ["sk-a", "sk-b"],
+              modelIds: ["gpt-5.4"],
+              channelIdPrefix: "ice-vua",
+              channelNamePrefix: "ICE VUA",
+              reasoning: true,
+              createRoundRobinGroup: true,
+            },
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const payload = await response.json();
+        expect(payload.ok).toBe(true);
+        expect(payload.meta).toEqual({
+          generatedChannelIds: ["ice-vua-1", "ice-vua-2"],
+          generatedGroupId: "ice-vua-rr",
+        });
+        expect(payload.settings.channels).toMatchObject([
+          {
+            id: "ice-vua-1",
+            name: "ICE VUA 1",
+            providerId: "ice-vua-1",
+            baseUrl: "https://ice.v.ua/v1",
+            apiKey: "sk-a",
+            api: "openai-responses",
+            defaultModel: "ice-vua-1/gpt-5.4",
+          },
+          {
+            id: "ice-vua-2",
+            name: "ICE VUA 2",
+            providerId: "ice-vua-2",
+            baseUrl: "https://ice.v.ua/v1",
+            apiKey: "sk-b",
+            api: "openai-responses",
+            defaultModel: "ice-vua-2/gpt-5.4",
+          },
+        ]);
+        expect(payload.settings.channelGroups).toEqual([
+          {
+            id: "ice-vua-rr",
+            name: "ICE VUA RR",
+            strategy: "round-robin",
+            channelIds: ["ice-vua-1", "ice-vua-2"],
+          },
+        ]);
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("auto-unassigns instances when removed channels are saved with auto-unassign enabled", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const modelChannelsPath = path.join(root, "model-channels.json");
+      await fs.writeFile(
+        modelChannelsPath,
+        JSON.stringify(
+          {
+            userCanConfigureModels: false,
+            channels: [
+              {
+                id: "openai-main",
+                name: "OpenAI Main",
+                providerId: "openai-main",
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "sk-secret",
+                api: "openai-responses",
+                models: [
+                  {
+                    id: "gpt-5-mini",
+                    name: "GPT-5 mini",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 128000,
+                    maxTokens: 16000,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+                defaultModel: "openai-main/gpt-5-mini",
+              },
+            ],
+            channelGroups: [],
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      await writeInstance(root, {
+        id: "alpha",
+        name: "Alpha",
+        modelChannelId: "openai-main",
+        port: 19111,
+      });
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        modelChannelsPath,
+        adminToken: "console-admin-secret",
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/model-channels`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+          body: JSON.stringify({
+            settings: {
+              userCanConfigureModels: false,
+              channels: [],
+              channelGroups: [],
+            },
+            autoUnassignRemovedChannels: true,
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const payload = await response.json();
+        expect(payload.meta.unassignedInstances).toEqual([
+          {
+            id: "alpha",
+            pool: "shared",
+            removedModelChannelId: "openai-main",
+            restartRequired: false,
+          },
+        ]);
+
+        const envFile = await fs.readFile(path.join(root, "alpha", "instance.env"), "utf8");
+        expect(envFile).not.toContain("INSTANCE_MODEL_CHANNEL_ID");
+
+        const configFile = JSON.parse(
+          await fs.readFile(path.join(root, "alpha", "config", "openclaw.instance.json5"), "utf8"),
+        );
+        expect(configFile.models).toBeUndefined();
+        expect(configFile.agents).toBeUndefined();
+
+        const listResponse = await fetch(`${baseUrl}/api/instances`);
+        expect(listResponse.status).toBe(200);
+        const listPayload = await listResponse.json();
+        expect(listPayload.items[0].modelChannelId).toBeNull();
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
   it("creates instances with a mapped channel group and writes a rotating config", async () => {
     await withTempInstancesRoot(async (root) => {
       const modelChannelsPath = path.join(root, "model-channels.json");

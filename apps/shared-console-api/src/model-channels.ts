@@ -57,6 +57,28 @@ export type SharedConsoleModelChannelSettings = {
   channelGroups: SharedConsoleModelChannelGroup[];
 };
 
+export type SharedConsoleModelChannelDraftGenerator = {
+  baseUrl: string;
+  api?: string;
+  apiKeys?: string[] | string;
+  modelIds?: string[] | string;
+  channelIdPrefix?: string;
+  channelNamePrefix?: string;
+  reasoning?: boolean;
+  allowImageInput?: boolean;
+  createRoundRobinGroup?: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+};
+
+export type SharedConsoleModelChannelDraftGenerationResult = {
+  settings: SharedConsoleModelChannelSettings;
+  meta: {
+    generatedChannelIds: string[];
+    generatedGroupId: string | null;
+  };
+};
+
 export type SharedConsoleModelChannelTarget =
   | {
       kind: "channel";
@@ -143,6 +165,87 @@ function normalizeHeaders(value: unknown): Record<string, string> | undefined {
     .map(([key, headerValue]) => [key.trim(), typeof headerValue === "string" ? headerValue.trim() : ""] as const)
     .filter(([key, headerValue]) => key && headerValue);
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function normalizeDelimitedStrings(
+  value: unknown,
+  label: string,
+  { allowEmpty = false } = {},
+): string[] {
+  if (Array.isArray(value)) {
+    const items = value
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .filter(Boolean);
+    if (items.length > 0 || allowEmpty) {
+      return items;
+    }
+    throw new Error(`${label} must contain at least one non-empty value.`);
+  }
+  if (typeof value === "string") {
+    const items = value
+      .split(/[\r\n,]+/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    if (items.length > 0 || allowEmpty) {
+      return items;
+    }
+    throw new Error(`${label} must contain at least one non-empty value.`);
+  }
+  if (value == null && allowEmpty) {
+    return [];
+  }
+  throw new Error(`${label} must be a string or array of strings.`);
+}
+
+function sanitizeSafeId(value: string, fallback = "channel"): string {
+  const sanitized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[^a-z0-9]+/, "")
+    .replace(/-+/g, "-")
+    .replace(/-+$/g, "");
+  return sanitized || fallback;
+}
+
+function deriveChannelIdPrefixFromBaseUrl(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    const hostname = sanitizeSafeId(url.hostname, "channel");
+    const pathname = sanitizeSafeId(url.pathname.replace(/^\/+|\/+$/g, ""), "");
+    return pathname ? `${hostname}-${pathname}` : hostname;
+  } catch {
+    return "channel";
+  }
+}
+
+function reserveUniqueId(base: string, takenIds: Set<string>): string {
+  const normalizedBase = sanitizeSafeId(base, "channel");
+  let candidate = normalizedBase;
+  let suffix = 2;
+  while (takenIds.has(candidate)) {
+    candidate = `${normalizedBase}-${suffix}`;
+    suffix += 1;
+  }
+  takenIds.add(candidate);
+  return candidate;
+}
+
+function reserveUniqueChannelIdentity(
+  base: string,
+  takenIds: Set<string>,
+  takenProviderIds: Set<string>,
+): string {
+  const normalizedBase = sanitizeSafeId(base, "channel");
+  let candidate = normalizedBase;
+  let suffix = 2;
+  while (takenIds.has(candidate) || takenProviderIds.has(candidate)) {
+    candidate = `${normalizedBase}-${suffix}`;
+    suffix += 1;
+  }
+  takenIds.add(candidate);
+  takenProviderIds.add(candidate);
+  return candidate;
 }
 
 function normalizeModelReference(
@@ -382,6 +485,120 @@ export async function writeSharedConsoleModelChannelSettings(
 ): Promise<void> {
   await fs.mkdir(path.dirname(settingsPath), { recursive: true });
   await fs.writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+}
+
+export function generateSharedConsoleModelChannelSettingsDraft(
+  settingsValue: unknown,
+  generatorValue: unknown,
+): SharedConsoleModelChannelDraftGenerationResult {
+  if (!isObject(generatorValue)) {
+    throw new Error("generator must be an object.");
+  }
+
+  const baseSettings = normalizeSharedConsoleModelChannelSettings(settingsValue);
+  const baseUrl = normalizeString(generatorValue.baseUrl, "generator.baseUrl", { required: true });
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(baseUrl);
+  } catch {
+    throw new Error("generator.baseUrl must be an absolute http/https URL.");
+  }
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    throw new Error("generator.baseUrl must use http or https.");
+  }
+
+  const api = normalizeString(generatorValue.api, "generator.api") || "openai-responses";
+  const rawApiKeys = normalizeDelimitedStrings(generatorValue.apiKeys, "generator.apiKeys", {
+    allowEmpty: true,
+  });
+  const apiKeys = rawApiKeys.length > 0 ? rawApiKeys : [""];
+  const modelIds = normalizeDelimitedStrings(generatorValue.modelIds, "generator.modelIds");
+  const channelIdPrefix =
+    sanitizeSafeId(
+      normalizeString(generatorValue.channelIdPrefix, "generator.channelIdPrefix") ||
+        deriveChannelIdPrefixFromBaseUrl(baseUrl),
+      "channel",
+    ) || "channel";
+  const channelNamePrefix =
+    normalizeString(generatorValue.channelNamePrefix, "generator.channelNamePrefix") || channelIdPrefix;
+  const reasoning = normalizeBoolean(generatorValue.reasoning, true);
+  const allowImageInput = normalizeBoolean(generatorValue.allowImageInput, false);
+  const createRoundRobinGroup = normalizeBoolean(generatorValue.createRoundRobinGroup, true);
+  const contextWindow = normalizePositiveInteger(
+    generatorValue.contextWindow,
+    128_000,
+    "generator.contextWindow",
+  );
+  const maxTokens = normalizePositiveInteger(generatorValue.maxTokens, 16_384, "generator.maxTokens");
+  const inputs: Array<"text" | "image"> = allowImageInput ? ["text", "image"] : ["text"];
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
+  const takenIds = new Set<string>([
+    ...baseSettings.channels.map((channel) => channel.id),
+    ...baseSettings.channelGroups.map((group) => group.id),
+  ]);
+  const takenProviderIds = new Set<string>(baseSettings.channels.map((channel) => channel.providerId));
+
+  const generatedChannels = apiKeys.map((apiKey, index) => {
+    const channelIdentityBase =
+      apiKeys.length > 1 ? `${channelIdPrefix}-${index + 1}` : channelIdPrefix;
+    const channelIdentity = reserveUniqueChannelIdentity(
+      channelIdentityBase,
+      takenIds,
+      takenProviderIds,
+    );
+    const channelName =
+      apiKeys.length > 1 ? `${channelNamePrefix} ${index + 1}` : channelNamePrefix;
+    const models = modelIds.map((modelId) => ({
+      id: modelId,
+      name: modelId,
+      reasoning,
+      input: inputs,
+      contextWindow,
+      maxTokens,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    }));
+    return {
+      id: channelIdentity,
+      name: channelName,
+      providerId: channelIdentity,
+      baseUrl: normalizedBaseUrl,
+      ...(apiKey ? { apiKey } : {}),
+      ...(api ? { api } : {}),
+      models,
+      defaultModel: `${channelIdentity}/${models[0].id}`,
+    } satisfies SharedConsoleModelChannel;
+  });
+
+  const generatedGroup =
+    createRoundRobinGroup && generatedChannels.length > 1
+      ? {
+          id: reserveUniqueId(`${channelIdPrefix}-rr`, takenIds),
+          name: `${channelNamePrefix} RR`,
+          strategy: "round-robin" as const,
+          channelIds: generatedChannels.map((channel) => channel.id),
+        }
+      : null;
+
+  const settings = normalizeSharedConsoleModelChannelSettings({
+    userCanConfigureModels: baseSettings.userCanConfigureModels,
+    channels: [...baseSettings.channels, ...generatedChannels],
+    channelGroups: generatedGroup
+      ? [...baseSettings.channelGroups, generatedGroup]
+      : baseSettings.channelGroups,
+  });
+
+  return {
+    settings,
+    meta: {
+      generatedChannelIds: generatedChannels.map((channel) => channel.id),
+      generatedGroupId: generatedGroup?.id ?? null,
+    },
+  };
 }
 
 export function resolveSharedConsoleModelChannelTarget(

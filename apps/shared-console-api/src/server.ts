@@ -33,6 +33,7 @@ import {
 } from "./instances.ts";
 import {
   buildSharedConsoleModelChannelCatalog,
+  generateSharedConsoleModelChannelSettingsDraft,
   normalizeSharedConsoleModelChannelSettings,
   readSharedConsoleModelChannelSettings,
   resolveSharedConsoleModelChannelTarget,
@@ -150,8 +151,8 @@ export function resolveSharedConsoleApiConfig(
 
 function setCorsHeaders(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Shared-Console-Admin-Token");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS");
 }
 
 function sendJson(res: ServerResponse, statusCode: number, body: JsonValue): void {
@@ -813,6 +814,13 @@ async function applyInstanceModelChannel(
   return await ensureInstance(config, deps, pool, id, false);
 }
 
+function resolveInstancePoolForRecord(
+  config: SharedConsoleApiConfig,
+  item: SharedInstanceRecord,
+): InstancePool {
+  return item.paths.root === config.dedicatedInstancesRoot ? "dedicated" : "shared";
+}
+
 async function handleModelChannelsRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -838,6 +846,11 @@ async function handleModelChannelsRequest(
 
   requireAdminRequest(config, req);
   const body = await readJsonBody(req);
+  const autoUnassignRemovedChannels = readOptionalBooleanBody(
+    body,
+    "autoUnassignRemovedChannels",
+    false,
+  );
   const nextSettings = normalizeSharedConsoleModelChannelSettings(body.settings ?? body);
   const instances = await listAllCurrentInstances(config, deps);
   const inUseIds = [...new Set(instances.map((item) => item.modelChannelId).filter(Boolean))];
@@ -845,15 +858,44 @@ async function handleModelChannelsRequest(
     (channelId) => !resolveSharedConsoleModelChannelTarget(nextSettings, channelId),
   );
   if (missingIds.length > 0) {
-    throw new HttpError(
-      400,
-      `Cannot remove channels that are still assigned to instances: ${missingIds.join(", ")}`,
-    );
+    if (!autoUnassignRemovedChannels) {
+      throw new HttpError(
+        400,
+        `Cannot remove channels that are still assigned to instances: ${missingIds.join(", ")}`,
+      );
+    }
   }
 
   await writeSharedConsoleModelChannelSettings(config.modelChannelsPath, nextSettings);
-  const affectedInstances: Array<{ id: string; pool: InstancePool; restartRequired: boolean }> = [];
+  const removedIdSet = new Set(missingIds);
+  const unassignedInstances: Array<{
+    id: string;
+    pool: InstancePool;
+    removedModelChannelId: string;
+    restartRequired: boolean;
+  }> = [];
   for (const item of instances) {
+    if (!item.modelChannelId || !removedIdSet.has(item.modelChannelId)) {
+      continue;
+    }
+    await applyInstanceModelChannel(
+      config,
+      deps,
+      resolveInstancePoolForRecord(config, item),
+      item.id,
+      null,
+    );
+    unassignedInstances.push({
+      id: item.id,
+      pool: resolveInstancePoolForRecord(config, item),
+      removedModelChannelId: item.modelChannelId,
+      restartRequired: item.process.state === "running",
+    });
+  }
+
+  const currentInstances = await listAllCurrentInstances(config, deps);
+  const affectedInstances: Array<{ id: string; pool: InstancePool; restartRequired: boolean }> = [];
+  for (const item of currentInstances) {
     if (!item.modelChannelId) {
       continue;
     }
@@ -864,10 +906,18 @@ async function handleModelChannelsRequest(
     await writeSharedConsoleInstanceModelConfig(item, target);
     affectedInstances.push({
       id: item.id,
-      pool: item.paths.root === config.dedicatedInstancesRoot ? "dedicated" : "shared",
+      pool: resolveInstancePoolForRecord(config, item),
       restartRequired: item.process.state === "running",
     });
   }
+
+  const restartRequired = [
+    ...new Set(
+      [...affectedInstances, ...unassignedInstances]
+        .filter((item) => item.restartRequired)
+        .map((item) => item.id),
+    ),
+  ];
 
   sendJson(res, 200, {
     ok: true,
@@ -876,8 +926,32 @@ async function handleModelChannelsRequest(
     settings: nextSettings,
     meta: {
       affectedInstances,
-      restartRequired: affectedInstances.filter((item) => item.restartRequired).map((item) => item.id),
+      unassignedInstances,
+      restartRequired,
     },
+  });
+}
+
+async function handleModelChannelsGenerateRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  config: SharedConsoleApiConfig,
+): Promise<void> {
+  if ((req.method ?? "GET").toUpperCase() !== "POST") {
+    throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
+  }
+
+  requireAdminRequest(config, req);
+  const body = await readJsonBody(req);
+  const currentSettings =
+    body.settings ?? (await readSharedConsoleModelChannelSettings(config.modelChannelsPath));
+  const generated = generateSharedConsoleModelChannelSettingsDraft(currentSettings, body.generator ?? body);
+  sendJson(res, 200, {
+    ok: true,
+    admin: true,
+    catalog: buildSharedConsoleModelChannelCatalog(generated.settings),
+    settings: generated.settings,
+    meta: generated.meta,
   });
 }
 
@@ -1349,6 +1423,11 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
 
         if (url.pathname === "/api/admin/validate") {
           await handleAdminValidate(req, res, config);
+          return;
+        }
+
+        if (url.pathname === "/api/model-channels/generate") {
+          await handleModelChannelsGenerateRequest(req, res, config);
           return;
         }
 

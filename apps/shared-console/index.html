@@ -125,6 +125,79 @@
             <input id="user-model-config-checkbox" type="checkbox" />
             <span>允许用户自己配置模型与渠道</span>
           </label>
+          <label class="field">
+            <span>渠道 URL</span>
+            <input
+              id="model-channel-generate-base-url"
+              type="text"
+              spellcheck="false"
+              placeholder="https://api.openai.com/v1"
+            />
+          </label>
+          <label class="field">
+            <span>API 类型</span>
+            <input
+              id="model-channel-generate-api"
+              type="text"
+              spellcheck="false"
+              value="openai-responses"
+            />
+          </label>
+          <label class="field">
+            <span>渠道 ID 前缀</span>
+            <input
+              id="model-channel-generate-id-prefix"
+              type="text"
+              spellcheck="false"
+              placeholder="openai-main"
+            />
+            <small class="field-note">留空时按 URL 主机名自动生成。</small>
+          </label>
+          <label class="field">
+            <span>渠道名称前缀</span>
+            <input
+              id="model-channel-generate-name-prefix"
+              type="text"
+              spellcheck="false"
+              placeholder="OpenAI Main"
+            />
+          </label>
+          <label class="field" style="grid-column: 1 / -1;">
+            <span>API Key（每行一个）</span>
+            <textarea
+              id="model-channel-generate-api-keys"
+              rows="3"
+              spellcheck="false"
+              placeholder="sk-xxx"
+            ></textarea>
+            <small class="field-note">填多个 key 时可一并生成多个渠道和轮询组。</small>
+          </label>
+          <label class="field" style="grid-column: 1 / -1;">
+            <span>模型 ID（每行一个）</span>
+            <textarea
+              id="model-channel-generate-models"
+              rows="3"
+              spellcheck="false"
+              placeholder="gpt-5-mini"
+            ></textarea>
+          </label>
+          <div class="inline-actions" style="grid-column: 1 / -1;">
+            <label class="toggle">
+              <input id="model-channel-generate-reasoning" type="checkbox" checked />
+              <span>按推理模型生成</span>
+            </label>
+            <label class="toggle">
+              <input id="model-channel-generate-image-input" type="checkbox" />
+              <span>支持图片输入</span>
+            </label>
+            <label class="toggle">
+              <input id="model-channel-generate-round-robin" type="checkbox" checked />
+              <span>多个 key 时自动生成轮询组</span>
+            </label>
+          </div>
+          <div class="inline-actions">
+            <button id="generate-model-channels-button" class="button" type="button">生成 JSON 草稿</button>
+          </div>
           <label class="field" style="grid-column: 1 / -1;">
             <span>模型渠道 JSON</span>
             <textarea
@@ -133,6 +206,10 @@
               spellcheck="false"
               placeholder='{"userCanConfigureModels":false,"channels":[]}'
             ></textarea>
+          </label>
+          <label class="toggle" style="grid-column: 1 / -1;">
+            <input id="auto-unassign-removed-model-channels-checkbox" type="checkbox" checked />
+            <span>保存时自动解除已删除渠道的实例映射</span>
           </label>
           <div class="inline-actions">
             <button id="reload-model-channels-button" class="button" type="button">重新加载</button>
@@ -198,6 +275,9 @@
                   <select id="detail-model-channel-select" name="modelChannelId"></select>
                 </label>
                 <div class="inline-actions">
+                  <button id="clear-detail-model-channel-button" class="button" type="button">
+                    解除映射
+                  </button>
                   <button id="save-detail-model-channel-button" class="button button-primary" type="submit">
                     保存渠道映射
                   </button>

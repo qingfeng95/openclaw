@@ -75,12 +75,26 @@ const elements = {
   modelChannelsPanel: document.querySelector("#model-channels-panel"),
   modelChannelsForm: document.querySelector("#model-channels-form"),
   modelChannelsTextarea: document.querySelector("#model-channels-textarea"),
+  modelChannelGenerateBaseUrlInput: document.querySelector("#model-channel-generate-base-url"),
+  modelChannelGenerateApiInput: document.querySelector("#model-channel-generate-api"),
+  modelChannelGenerateIdPrefixInput: document.querySelector("#model-channel-generate-id-prefix"),
+  modelChannelGenerateNamePrefixInput: document.querySelector("#model-channel-generate-name-prefix"),
+  modelChannelGenerateApiKeysTextarea: document.querySelector("#model-channel-generate-api-keys"),
+  modelChannelGenerateModelsTextarea: document.querySelector("#model-channel-generate-models"),
+  modelChannelGenerateReasoningCheckbox: document.querySelector("#model-channel-generate-reasoning"),
+  modelChannelGenerateImageInputCheckbox: document.querySelector("#model-channel-generate-image-input"),
+  modelChannelGenerateRoundRobinCheckbox: document.querySelector("#model-channel-generate-round-robin"),
+  generateModelChannelsButton: document.querySelector("#generate-model-channels-button"),
   userModelConfigCheckbox: document.querySelector("#user-model-config-checkbox"),
+  autoUnassignRemovedModelChannelsCheckbox: document.querySelector(
+    "#auto-unassign-removed-model-channels-checkbox",
+  ),
   reloadModelChannelsButton: document.querySelector("#reload-model-channels-button"),
   saveModelChannelsButton: document.querySelector("#save-model-channels-button"),
   createModelChannelSelect: document.querySelector("#create-model-channel-select"),
   detailModelChannelForm: document.querySelector("#detail-model-channel-form"),
   detailModelChannelSelect: document.querySelector("#detail-model-channel-select"),
+  clearDetailModelChannelButton: document.querySelector("#clear-detail-model-channel-button"),
   saveDetailModelChannelButton: document.querySelector("#save-detail-model-channel-button"),
   startButton: document.querySelector("#start-button"),
   stopButton: document.querySelector("#stop-button"),
@@ -2297,6 +2311,70 @@ buildModelChannelSettingsDraft = function () {
   };
 };
 
+function buildModelChannelGeneratorPayload() {
+  const baseSettings =
+    elements.modelChannelsTextarea?.value?.trim()
+      ? buildModelChannelSettingsDraft()
+      : state.modelChannelSettings || defaultModelChannelSettings();
+  return {
+    settings: baseSettings,
+    generator: {
+      baseUrl: elements.modelChannelGenerateBaseUrlInput?.value?.trim() || "",
+      api: elements.modelChannelGenerateApiInput?.value?.trim() || "openai-responses",
+      channelIdPrefix: elements.modelChannelGenerateIdPrefixInput?.value?.trim() || "",
+      channelNamePrefix: elements.modelChannelGenerateNamePrefixInput?.value?.trim() || "",
+      apiKeys: elements.modelChannelGenerateApiKeysTextarea?.value ?? "",
+      modelIds: elements.modelChannelGenerateModelsTextarea?.value ?? "",
+      reasoning: Boolean(elements.modelChannelGenerateReasoningCheckbox?.checked),
+      allowImageInput: Boolean(elements.modelChannelGenerateImageInputCheckbox?.checked),
+      createRoundRobinGroup: Boolean(elements.modelChannelGenerateRoundRobinCheckbox?.checked),
+    },
+  };
+}
+
+function formatModelChannelSaveDetail(payload) {
+  const restartRequired = Array.isArray(payload?.meta?.restartRequired) ? payload.meta.restartRequired : [];
+  const unassignedInstances = Array.isArray(payload?.meta?.unassignedInstances) ? payload.meta.unassignedInstances : [];
+  const detailParts = [];
+  if (unassignedInstances.length > 0) {
+    detailParts.push(`Auto-unmapped: ${unassignedInstances.map((item) => item.id).join(", ")}`);
+  }
+  detailParts.push(
+    restartRequired.length > 0
+      ? `Restart required: ${restartRequired.join(", ")}`
+      : "No running mapped instance requires restart.",
+  );
+  return detailParts.join(" ");
+}
+
+async function updateSelectedInstanceModelChannel(modelChannelId) {
+  if (!state.selectedId) {
+    return;
+  }
+  if (!isAdminModeEnabled()) {
+    pushStatus("error", "Save failed", "Enter admin mode first.");
+    return;
+  }
+  setBusy(true);
+  try {
+    await fetchJson(`${instanceApiBase(state.selectedScope)}/${encodeURIComponent(state.selectedId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ modelChannelId }),
+    });
+    pushStatus(
+      "success",
+      "Instance model channel updated",
+      `${state.selectedId} -> ${formatModelChannelLabel(modelChannelId || "")}`,
+    );
+    await loadInstances({ preserveSelection: true });
+  } catch (error) {
+    pushStatus("error", "Instance model channel update failed", error.message);
+    updateConnectionNote(`Save failed: ${error.message}`, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
 renderModelChannelsPanel = function () {
   if (
     !elements.modelChannelsPanel ||
@@ -2321,6 +2399,17 @@ renderModelChannelsPanel = function () {
   }
   elements.userModelConfigCheckbox.disabled = !adminEnabled;
   elements.modelChannelsTextarea.disabled = !adminEnabled;
+  elements.modelChannelGenerateBaseUrlInput?.disabled = !adminEnabled;
+  elements.modelChannelGenerateApiInput?.disabled = !adminEnabled;
+  elements.modelChannelGenerateIdPrefixInput?.disabled = !adminEnabled;
+  elements.modelChannelGenerateNamePrefixInput?.disabled = !adminEnabled;
+  elements.modelChannelGenerateApiKeysTextarea?.disabled = !adminEnabled;
+  elements.modelChannelGenerateModelsTextarea?.disabled = !adminEnabled;
+  elements.modelChannelGenerateReasoningCheckbox?.disabled = !adminEnabled;
+  elements.modelChannelGenerateImageInputCheckbox?.disabled = !adminEnabled;
+  elements.modelChannelGenerateRoundRobinCheckbox?.disabled = !adminEnabled;
+  elements.generateModelChannelsButton?.disabled = !adminEnabled;
+  elements.autoUnassignRemovedModelChannelsCheckbox?.disabled = !adminEnabled;
   elements.reloadModelChannelsButton.disabled = !adminEnabled;
   elements.saveModelChannelsButton.disabled = !adminEnabled;
 
@@ -2336,7 +2425,7 @@ renderModelChannelsPanel = function () {
   }
   elements.modelChannelsPanel.textContent = `Global channels: ${state.modelChannelCatalog.channels.length}. User model config: ${
     state.modelChannelCatalog.userCanConfigureModels ? "enabled" : "disabled"
-  }. Saving will rewrite mapped instance configs; running mapped instances need restart to pick up route changes.`;
+  }. Saving will rewrite mapped instance configs; running mapped instances need restart to pick up route changes. Removing a channel can also auto-unassign mapped instances.`;
 };
 
 renderMetaGrid = function (item) {
@@ -2411,6 +2500,9 @@ renderDetail = function () {
     if (elements.detailModelChannelSelect) {
       elements.detailModelChannelSelect.disabled = true;
     }
+    if (elements.clearDetailModelChannelButton) {
+      elements.clearDetailModelChannelButton.disabled = true;
+    }
     if (elements.saveDetailModelChannelButton) {
       elements.saveDetailModelChannelButton.disabled = true;
     }
@@ -2425,6 +2517,9 @@ renderDetail = function () {
   renderModelChannelSelect(elements.detailModelChannelSelect, item.modelChannelId || "");
   if (elements.detailModelChannelSelect) {
     elements.detailModelChannelSelect.disabled = !adminEnabled;
+  }
+  if (elements.clearDetailModelChannelButton) {
+    elements.clearDetailModelChannelButton.disabled = !adminEnabled;
   }
   if (elements.saveDetailModelChannelButton) {
     elements.saveDetailModelChannelButton.disabled = !adminEnabled;
@@ -2492,6 +2587,7 @@ clearAdminMode = function () {
   resetPairingState();
   state.modelChannelSettings = null;
   state.modelChannelSettingsText = "";
+  state.modelChannelEditorDirty = false;
   updateAdminModeUi();
   renderAll();
   void loadInstances({ preserveSelection: true });
@@ -2511,25 +2607,76 @@ function handleModelChannelsSubmit(event) {
       const payload = await fetchJson("/api/model-channels", {
         method: "PUT",
         adminAuth: true,
-        body: JSON.stringify({ settings }),
+        body: JSON.stringify({
+          settings,
+          autoUnassignRemovedChannels: Boolean(
+            elements.autoUnassignRemovedModelChannelsCheckbox?.checked,
+          ),
+        }),
       });
       state.modelChannelCatalog = ensureModelChannelCatalogShape(payload?.catalog);
       state.modelChannelSettings = normalizeModelChannelSettingsForEditor(payload?.settings ?? settings);
       state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
       state.modelChannelEditorDirty = false;
       renderAll();
-      const restartRequired = Array.isArray(payload?.meta?.restartRequired) ? payload.meta.restartRequired : [];
       pushStatus(
         "success",
         "Global model channels saved",
-        restartRequired.length > 0
-          ? `Restart required: ${restartRequired.join(", ")}`
-          : "No running mapped instance requires restart.",
+        formatModelChannelSaveDetail(payload),
       );
       await loadInstances({ preserveSelection: true });
     } catch (error) {
-      pushStatus("error", "Global model channel save failed", error.message);
+      const detail = String(error?.message || "");
+      const hint = detail.includes("Cannot remove channels that are still assigned to instances")
+        ? `${detail} Enable auto-unassign or clear the instance mapping first.`
+        : detail;
+      pushStatus("error", "Global model channel save failed", hint);
       updateConnectionNote(`Save failed: ${error.message}`, true);
+    } finally {
+      setBusy(false);
+    }
+  })();
+}
+
+function handleModelChannelGenerateSubmit() {
+  return (async () => {
+    if (!isAdminModeEnabled()) {
+      pushStatus("error", "Generate failed", "Enter admin mode first.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const payload = buildModelChannelGeneratorPayload();
+      const response = await fetchJson("/api/model-channels/generate", {
+        method: "POST",
+        adminAuth: true,
+        body: JSON.stringify(payload),
+      });
+      state.modelChannelSettings = normalizeModelChannelSettingsForEditor(
+        response?.settings ?? payload.settings,
+      );
+      state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
+      if (elements.modelChannelsTextarea) {
+        elements.modelChannelsTextarea.value = state.modelChannelSettingsText;
+      }
+      state.modelChannelEditorDirty = true;
+      renderAll();
+      const generatedChannelIds = Array.isArray(response?.meta?.generatedChannelIds)
+        ? response.meta.generatedChannelIds
+        : [];
+      const generatedGroupId = String(response?.meta?.generatedGroupId || "").trim();
+      const detailParts = [];
+      if (generatedChannelIds.length > 0) {
+        detailParts.push(`Generated channels: ${generatedChannelIds.join(", ")}`);
+      }
+      if (generatedGroupId) {
+        detailParts.push(`Generated group: ${generatedGroupId}`);
+      }
+      detailParts.push("Draft updated. Click save to persist.");
+      pushStatus("success", "Model channel JSON generated", detailParts.join(" "));
+    } catch (error) {
+      pushStatus("error", "Model channel generation failed", error.message);
+      updateConnectionNote(`Generate failed: ${error.message}`, true);
     } finally {
       setBusy(false);
     }
@@ -2539,32 +2686,8 @@ function handleModelChannelsSubmit(event) {
 function handleDetailModelChannelSubmit(event) {
   return (async () => {
     event.preventDefault();
-    if (!state.selectedId) {
-      return;
-    }
-    if (!isAdminModeEnabled()) {
-      pushStatus("error", "Save failed", "Enter admin mode first.");
-      return;
-    }
     const modelChannelId = elements.detailModelChannelSelect?.value?.trim() || null;
-    setBusy(true);
-    try {
-      await fetchJson(`${instanceApiBase(state.selectedScope)}/${encodeURIComponent(state.selectedId)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ modelChannelId }),
-      });
-      pushStatus(
-        "success",
-        "Instance model channel updated",
-        `${state.selectedId} -> ${formatModelChannelLabel(modelChannelId || "")}`,
-      );
-      await loadInstances({ preserveSelection: true });
-    } catch (error) {
-      pushStatus("error", "Instance model channel update failed", error.message);
-      updateConnectionNote(`Save failed: ${error.message}`, true);
-    } finally {
-      setBusy(false);
-    }
+    await updateSelectedInstanceModelChannel(modelChannelId);
   })();
 }
 
@@ -2578,6 +2701,9 @@ function bindModelChannelEvents() {
   elements.userModelConfigCheckbox?.addEventListener("change", () => {
     state.modelChannelEditorDirty = true;
   });
+  elements.generateModelChannelsButton?.addEventListener("click", () => {
+    void handleModelChannelGenerateSubmit();
+  });
   elements.reloadModelChannelsButton?.addEventListener("click", () => {
     void loadModelChannelConfig({ announce: true })
       .then(() => renderAll())
@@ -2587,6 +2713,12 @@ function bindModelChannelEvents() {
   });
   elements.detailModelChannelForm?.addEventListener("submit", (event) => {
     void handleDetailModelChannelSubmit(event);
+  });
+  elements.clearDetailModelChannelButton?.addEventListener("click", () => {
+    if (elements.detailModelChannelSelect) {
+      elements.detailModelChannelSelect.value = "";
+    }
+    void updateSelectedInstanceModelChannel(null);
   });
 }
 

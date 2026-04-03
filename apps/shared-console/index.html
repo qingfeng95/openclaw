@@ -193,6 +193,20 @@
               濡傛灉濉簡杩欎釜鎵归噺鍖猴紝鐢熸垚鍣ㄤ細鎸夎渚濇鐢熸垚銆傛牸寮忥細鍚嶇О鍓嶇紑 | ID 鍓嶇紑 | URL | 妯″瀷1,妯″瀷2 | Key1,Key2 | API锛堝彲閫夛級
             </small>
           </label>
+          <div class="detail-card generator-card-collection" style="grid-column: 1 / -1;">
+            <div class="generator-card-header">
+              <div>
+                <h3>批量渠道卡片</h3>
+                <p class="field-note">
+                  推荐给多渠道、多 key 场景。只要下面任一卡片里有内容，就优先按卡片生成；上面的批量文本框保留为兼容模式。
+                </p>
+              </div>
+              <button id="add-model-channel-generate-card-button" class="button" type="button">
+                新增一张卡片
+              </button>
+            </div>
+            <div id="model-channel-generate-cards" class="generator-cards"></div>
+          </div>
           <div class="inline-actions" style="grid-column: 1 / -1;">
             <label class="toggle">
               <input id="model-channel-generate-reasoning" type="checkbox" checked />

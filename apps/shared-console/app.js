@@ -82,6 +82,8 @@ const elements = {
   modelChannelGenerateApiKeysTextarea: document.querySelector("#model-channel-generate-api-keys"),
   modelChannelGenerateModelsTextarea: document.querySelector("#model-channel-generate-models"),
   modelChannelGenerateBatchTextarea: document.querySelector("#model-channel-generate-batch-textarea"),
+  addModelChannelGenerateCardButton: document.querySelector("#add-model-channel-generate-card-button"),
+  modelChannelGenerateCards: document.querySelector("#model-channel-generate-cards"),
   modelChannelGenerateReasoningCheckbox: document.querySelector("#model-channel-generate-reasoning"),
   modelChannelGenerateImageInputCheckbox: document.querySelector("#model-channel-generate-image-input"),
   modelChannelGenerateRoundRobinCheckbox: document.querySelector("#model-channel-generate-round-robin"),
@@ -2352,6 +2354,184 @@ function buildSingleModelChannelGeneratorPayload(baseSettings) {
   };
 }
 
+function getModelChannelGenerateCards() {
+  return Array.from(elements.modelChannelGenerateCards?.querySelectorAll(".generator-card") ?? []);
+}
+
+function renumberModelChannelGenerateCards() {
+  getModelChannelGenerateCards().forEach((card, index) => {
+    const title = card.querySelector("[data-model-channel-generate-card-title]");
+    if (title) {
+      title.textContent = `配置 ${index + 1}`;
+    }
+  });
+}
+
+function buildModelChannelGenerateCardDefaultValues() {
+  return {
+    baseUrl: elements.modelChannelGenerateBaseUrlInput?.value?.trim() || "",
+    api: elements.modelChannelGenerateApiInput?.value?.trim() || "",
+    modelIds: elements.modelChannelGenerateModelsTextarea?.value?.trim() || "",
+  };
+}
+
+function createModelChannelGenerateCard(values = {}) {
+  const channelNamePrefix = String(values.channelNamePrefix || "").trim();
+  const channelIdPrefix = String(values.channelIdPrefix || "").trim();
+  const baseUrl = String(values.baseUrl || "").trim();
+  const api = String(values.api || "").trim();
+  const modelIds = String(values.modelIds || "").trim();
+  const apiKeys = String(values.apiKeys || "").trim();
+  const card = document.createElement("section");
+  card.className = "generator-card";
+  card.innerHTML = `
+    <div class="generator-card-header">
+      <p class="generator-card-title" data-model-channel-generate-card-title>配置</p>
+      <div class="inline-actions">
+        <button class="button" type="button" data-action="remove-model-channel-generate-card">
+          删除此卡片
+        </button>
+      </div>
+    </div>
+    <div class="generator-card-grid">
+      <label class="field">
+        <span>渠道名称前缀</span>
+        <input
+          data-field="channelNamePrefix"
+          type="text"
+          spellcheck="false"
+          placeholder="OpenAI Main"
+          value="${escapeHtml(channelNamePrefix)}"
+        />
+      </label>
+      <label class="field">
+        <span>渠道 ID 前缀</span>
+        <input
+          data-field="channelIdPrefix"
+          type="text"
+          spellcheck="false"
+          placeholder="openai-main"
+          value="${escapeHtml(channelIdPrefix)}"
+        />
+      </label>
+      <label class="field">
+        <span>渠道 URL</span>
+        <input
+          data-field="baseUrl"
+          type="text"
+          spellcheck="false"
+          placeholder="https://api.openai.com/v1"
+          value="${escapeHtml(baseUrl)}"
+        />
+      </label>
+      <label class="field">
+        <span>API 类型（可选）</span>
+        <input
+          data-field="api"
+          type="text"
+          spellcheck="false"
+          placeholder="留空时沿用上方 API 类型"
+          value="${escapeHtml(api)}"
+        />
+      </label>
+      <label class="field field-span-2">
+        <span>模型 ID（每行一个）</span>
+        <textarea
+          data-field="modelIds"
+          rows="3"
+          spellcheck="false"
+          placeholder="gpt-5-mini"
+        >${escapeHtml(modelIds)}</textarea>
+      </label>
+      <label class="field field-span-2">
+        <span>API Key（每行一个）</span>
+        <textarea
+          data-field="apiKeys"
+          rows="3"
+          spellcheck="false"
+          placeholder="sk-xxx"
+        >${escapeHtml(apiKeys)}</textarea>
+      </label>
+    </div>
+  `;
+  return card;
+}
+
+function appendModelChannelGenerateCard(values = {}) {
+  if (!elements.modelChannelGenerateCards) {
+    return null;
+  }
+  const card = createModelChannelGenerateCard(values);
+  elements.modelChannelGenerateCards.appendChild(card);
+  renumberModelChannelGenerateCards();
+  return card;
+}
+
+function ensureModelChannelGenerateCardsInitialized() {
+  if (!elements.modelChannelGenerateCards) {
+    return;
+  }
+  if (getModelChannelGenerateCards().length === 0) {
+    appendModelChannelGenerateCard();
+  }
+}
+
+function readModelChannelGenerateCardField(card, field) {
+  return card.querySelector(`[data-field="${field}"]`)?.value?.trim() || "";
+}
+
+function collectBatchCardModelChannelGenerators() {
+  const sharedOptions = buildModelChannelGeneratorSharedOptions();
+  const generators = [];
+  const cards = getModelChannelGenerateCards();
+  for (const [index, card] of cards.entries()) {
+    const channelNamePrefix = readModelChannelGenerateCardField(card, "channelNamePrefix");
+    const channelIdPrefix = readModelChannelGenerateCardField(card, "channelIdPrefix");
+    const baseUrl = readModelChannelGenerateCardField(card, "baseUrl");
+    const api = readModelChannelGenerateCardField(card, "api");
+    const modelIdsRaw = readModelChannelGenerateCardField(card, "modelIds");
+    const apiKeysRaw = readModelChannelGenerateCardField(card, "apiKeys");
+    const hasContent = [channelNamePrefix, channelIdPrefix, baseUrl, modelIdsRaw, apiKeysRaw].some(Boolean);
+    if (!hasContent) {
+      continue;
+    }
+    if (!channelNamePrefix || !channelIdPrefix || !baseUrl || !modelIdsRaw || !apiKeysRaw) {
+      throw new Error(`Card ${index + 1} is missing required fields.`);
+    }
+    const modelIds = splitModelChannelGeneratorList(modelIdsRaw);
+    const apiKeys = splitModelChannelGeneratorList(apiKeysRaw);
+    if (modelIds.length === 0) {
+      throw new Error(`Card ${index + 1} must include at least one model id.`);
+    }
+    if (apiKeys.length === 0) {
+      throw new Error(`Card ${index + 1} must include at least one API key.`);
+    }
+    generators.push({
+      baseUrl,
+      api: api || sharedOptions.api,
+      channelIdPrefix,
+      channelNamePrefix,
+      modelIds,
+      apiKeys,
+      reasoning: sharedOptions.reasoning,
+      allowImageInput: sharedOptions.allowImageInput,
+      createRoundRobinGroup: sharedOptions.createRoundRobinGroup,
+    });
+  }
+  return generators;
+}
+
+function setModelChannelGenerateCardsDisabled(disabled) {
+  if (elements.addModelChannelGenerateCardButton) {
+    elements.addModelChannelGenerateCardButton.disabled = disabled;
+  }
+  const controls =
+    elements.modelChannelGenerateCards?.querySelectorAll("input, textarea, button") ?? [];
+  for (const control of controls) {
+    control.disabled = disabled;
+  }
+}
+
 function parseBatchModelChannelGenerators(raw) {
   const sharedOptions = buildModelChannelGeneratorSharedOptions();
   const lines = String(raw || "")
@@ -2448,6 +2628,7 @@ renderModelChannelsPanel = function () {
 
   const adminEnabled = isAdminModeEnabled();
   const settings = state.modelChannelSettings || defaultModelChannelSettings();
+  ensureModelChannelGenerateCardsInitialized();
   if (!state.modelChannelEditorDirty) {
     elements.userModelConfigCheckbox.checked = Boolean(
       state.modelChannelSettings?.userCanConfigureModels ?? state.modelChannelCatalog.userCanConfigureModels,
@@ -2469,6 +2650,7 @@ renderModelChannelsPanel = function () {
   elements.modelChannelGenerateReasoningCheckbox?.disabled = !adminEnabled;
   elements.modelChannelGenerateImageInputCheckbox?.disabled = !adminEnabled;
   elements.modelChannelGenerateRoundRobinCheckbox?.disabled = !adminEnabled;
+  setModelChannelGenerateCardsDisabled(!adminEnabled);
   elements.generateModelChannelsButton?.disabled = !adminEnabled;
   elements.autoUnassignRemovedModelChannelsCheckbox?.disabled = !adminEnabled;
   elements.reloadModelChannelsButton.disabled = !adminEnabled;
@@ -2708,13 +2890,15 @@ function handleModelChannelGenerateSubmit() {
     setBusy(true);
     try {
       const baseSettings = buildModelChannelGeneratorBaseSettings();
+      const cardGenerators = collectBatchCardModelChannelGenerators();
       const batchRaw = elements.modelChannelGenerateBatchTextarea?.value?.trim() || "";
       let nextSettings = baseSettings;
       const generatedChannelIds = [];
       const generatedGroupIds = [];
 
-      if (batchRaw) {
-        const generators = parseBatchModelChannelGenerators(batchRaw);
+      if (cardGenerators.length > 0 || batchRaw) {
+        const generators =
+          cardGenerators.length > 0 ? cardGenerators : parseBatchModelChannelGenerators(batchRaw);
         for (const generator of generators) {
           const response = await fetchJson("/api/model-channels/generate", {
             method: "POST",
@@ -2789,6 +2973,26 @@ function bindModelChannelEvents() {
   elements.modelChannelsForm?.addEventListener("submit", (event) => {
     void handleModelChannelsSubmit(event);
   });
+  elements.addModelChannelGenerateCardButton?.addEventListener("click", () => {
+    const card = appendModelChannelGenerateCard(buildModelChannelGenerateCardDefaultValues());
+    card?.querySelector('[data-field="channelNamePrefix"]')?.focus();
+  });
+  elements.modelChannelGenerateCards?.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) {
+      return;
+    }
+    const removeButton = event.target.closest('[data-action="remove-model-channel-generate-card"]');
+    if (!removeButton) {
+      return;
+    }
+    const card = removeButton.closest(".generator-card");
+    if (!card) {
+      return;
+    }
+    card.remove();
+    ensureModelChannelGenerateCardsInitialized();
+    renumberModelChannelGenerateCards();
+  });
   elements.modelChannelsTextarea?.addEventListener("input", () => {
     state.modelChannelEditorDirty = true;
   });
@@ -2828,6 +3032,7 @@ async function init() {
   elements.statusFeed.innerHTML = "";
   bindEvents();
   bindModelChannelEvents();
+  ensureModelChannelGenerateCardsInitialized();
   syncCreateFormConstraints();
   updateAdminModeUi();
   configureAutoRefresh(elements.autoRefreshCheckbox.checked);

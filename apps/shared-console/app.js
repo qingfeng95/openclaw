@@ -29,6 +29,7 @@ const state = {
   },
   modelChannelSettings: null,
   modelChannelSettingsText: "",
+  modelChannelEditorDirty: false,
   filter: "",
   busy: false,
   timerId: null,
@@ -1772,6 +1773,7 @@ function clearAdminMode() {
   resetPairingState();
   state.modelChannelSettings = null;
   state.modelChannelSettingsText = "";
+  state.modelChannelEditorDirty = false;
   updateAdminModeUi();
   renderDetail();
   renderModelChannelsPanel();
@@ -2259,9 +2261,11 @@ loadModelChannelConfig = function ({ announce = false } = {}) {
     if (payload?.admin && payload?.settings) {
       state.modelChannelSettings = normalizeModelChannelSettingsForEditor(payload.settings);
       state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
+      state.modelChannelEditorDirty = false;
     } else if (!isAdminModeEnabled()) {
       state.modelChannelSettings = null;
       state.modelChannelSettingsText = "";
+      state.modelChannelEditorDirty = false;
     }
       if (announce) {
         pushStatus(
@@ -2306,10 +2310,12 @@ renderModelChannelsPanel = function () {
 
   const adminEnabled = isAdminModeEnabled();
   const settings = state.modelChannelSettings || defaultModelChannelSettings();
-  elements.userModelConfigCheckbox.checked = Boolean(
-    state.modelChannelSettings?.userCanConfigureModels ?? state.modelChannelCatalog.userCanConfigureModels,
-  );
-  if (!elements.modelChannelsTextarea.value || adminEnabled) {
+  if (!state.modelChannelEditorDirty) {
+    elements.userModelConfigCheckbox.checked = Boolean(
+      state.modelChannelSettings?.userCanConfigureModels ?? state.modelChannelCatalog.userCanConfigureModels,
+    );
+  }
+  if (!state.modelChannelEditorDirty && (!elements.modelChannelsTextarea.value || adminEnabled)) {
     elements.modelChannelsTextarea.value =
       state.modelChannelSettingsText || JSON.stringify(settings, null, 2);
   }
@@ -2510,6 +2516,7 @@ function handleModelChannelsSubmit(event) {
       state.modelChannelCatalog = ensureModelChannelCatalogShape(payload?.catalog);
       state.modelChannelSettings = normalizeModelChannelSettingsForEditor(payload?.settings ?? settings);
       state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
+      state.modelChannelEditorDirty = false;
       renderAll();
       const restartRequired = Array.isArray(payload?.meta?.restartRequired) ? payload.meta.restartRequired : [];
       pushStatus(
@@ -2564,6 +2571,12 @@ function handleDetailModelChannelSubmit(event) {
 function bindModelChannelEvents() {
   elements.modelChannelsForm?.addEventListener("submit", (event) => {
     void handleModelChannelsSubmit(event);
+  });
+  elements.modelChannelsTextarea?.addEventListener("input", () => {
+    state.modelChannelEditorDirty = true;
+  });
+  elements.userModelConfigCheckbox?.addEventListener("change", () => {
+    state.modelChannelEditorDirty = true;
   });
   elements.reloadModelChannelsButton?.addEventListener("click", () => {
     void loadModelChannelConfig({ announce: true })

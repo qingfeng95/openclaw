@@ -81,6 +81,7 @@ const elements = {
   modelChannelGenerateNamePrefixInput: document.querySelector("#model-channel-generate-name-prefix"),
   modelChannelGenerateApiKeysTextarea: document.querySelector("#model-channel-generate-api-keys"),
   modelChannelGenerateModelsTextarea: document.querySelector("#model-channel-generate-models"),
+  modelChannelGenerateBatchTextarea: document.querySelector("#model-channel-generate-batch-textarea"),
   modelChannelGenerateReasoningCheckbox: document.querySelector("#model-channel-generate-reasoning"),
   modelChannelGenerateImageInputCheckbox: document.querySelector("#model-channel-generate-image-input"),
   modelChannelGenerateRoundRobinCheckbox: document.querySelector("#model-channel-generate-round-robin"),
@@ -2311,25 +2312,84 @@ buildModelChannelSettingsDraft = function () {
   };
 };
 
-function buildModelChannelGeneratorPayload() {
-  const baseSettings =
-    elements.modelChannelsTextarea?.value?.trim()
-      ? buildModelChannelSettingsDraft()
-      : state.modelChannelSettings || defaultModelChannelSettings();
+function buildModelChannelGeneratorBaseSettings() {
+  return elements.modelChannelsTextarea?.value?.trim()
+    ? buildModelChannelSettingsDraft()
+    : state.modelChannelSettings || defaultModelChannelSettings();
+}
+
+function splitModelChannelGeneratorList(value) {
+  return String(value || "")
+    .split(/[\r\n,，;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function buildModelChannelGeneratorSharedOptions() {
+  return {
+    api: elements.modelChannelGenerateApiInput?.value?.trim() || "openai-responses",
+    reasoning: Boolean(elements.modelChannelGenerateReasoningCheckbox?.checked),
+    allowImageInput: Boolean(elements.modelChannelGenerateImageInputCheckbox?.checked),
+    createRoundRobinGroup: Boolean(elements.modelChannelGenerateRoundRobinCheckbox?.checked),
+  };
+}
+
+function buildSingleModelChannelGeneratorPayload(baseSettings) {
+  const sharedOptions = buildModelChannelGeneratorSharedOptions();
   return {
     settings: baseSettings,
     generator: {
       baseUrl: elements.modelChannelGenerateBaseUrlInput?.value?.trim() || "",
-      api: elements.modelChannelGenerateApiInput?.value?.trim() || "openai-responses",
+      api: sharedOptions.api,
       channelIdPrefix: elements.modelChannelGenerateIdPrefixInput?.value?.trim() || "",
       channelNamePrefix: elements.modelChannelGenerateNamePrefixInput?.value?.trim() || "",
       apiKeys: elements.modelChannelGenerateApiKeysTextarea?.value ?? "",
       modelIds: elements.modelChannelGenerateModelsTextarea?.value ?? "",
-      reasoning: Boolean(elements.modelChannelGenerateReasoningCheckbox?.checked),
-      allowImageInput: Boolean(elements.modelChannelGenerateImageInputCheckbox?.checked),
-      createRoundRobinGroup: Boolean(elements.modelChannelGenerateRoundRobinCheckbox?.checked),
+      reasoning: sharedOptions.reasoning,
+      allowImageInput: sharedOptions.allowImageInput,
+      createRoundRobinGroup: sharedOptions.createRoundRobinGroup,
     },
   };
+}
+
+function parseBatchModelChannelGenerators(raw) {
+  const sharedOptions = buildModelChannelGeneratorSharedOptions();
+  const lines = String(raw || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+  if (lines.length === 0) {
+    return [];
+  }
+  return lines.map((line, index) => {
+    const parts = line.split("|").map((part) => part.trim());
+    if (parts.length < 5 || parts.length > 6) {
+      throw new Error(`Batch line ${index + 1} must contain 5 or 6 "|" separated columns.`);
+    }
+    const [channelNamePrefix, channelIdPrefix, baseUrl, modelIdsRaw, apiKeysRaw, apiRaw] = parts;
+    if (!channelNamePrefix || !channelIdPrefix || !baseUrl || !modelIdsRaw || !apiKeysRaw) {
+      throw new Error(`Batch line ${index + 1} is missing required fields.`);
+    }
+    const modelIds = splitModelChannelGeneratorList(modelIdsRaw);
+    const apiKeys = splitModelChannelGeneratorList(apiKeysRaw);
+    if (modelIds.length === 0) {
+      throw new Error(`Batch line ${index + 1} must include at least one model id.`);
+    }
+    if (apiKeys.length === 0) {
+      throw new Error(`Batch line ${index + 1} must include at least one API key.`);
+    }
+    return {
+      baseUrl,
+      api: apiRaw || sharedOptions.api,
+      channelIdPrefix,
+      channelNamePrefix,
+      modelIds,
+      apiKeys,
+      reasoning: sharedOptions.reasoning,
+      allowImageInput: sharedOptions.allowImageInput,
+      createRoundRobinGroup: sharedOptions.createRoundRobinGroup,
+    };
+  });
 }
 
 function formatModelChannelSaveDetail(payload) {
@@ -2405,6 +2465,7 @@ renderModelChannelsPanel = function () {
   elements.modelChannelGenerateNamePrefixInput?.disabled = !adminEnabled;
   elements.modelChannelGenerateApiKeysTextarea?.disabled = !adminEnabled;
   elements.modelChannelGenerateModelsTextarea?.disabled = !adminEnabled;
+  elements.modelChannelGenerateBatchTextarea?.disabled = !adminEnabled;
   elements.modelChannelGenerateReasoningCheckbox?.disabled = !adminEnabled;
   elements.modelChannelGenerateImageInputCheckbox?.disabled = !adminEnabled;
   elements.modelChannelGenerateRoundRobinCheckbox?.disabled = !adminEnabled;
@@ -2646,31 +2707,64 @@ function handleModelChannelGenerateSubmit() {
     }
     setBusy(true);
     try {
-      const payload = buildModelChannelGeneratorPayload();
-      const response = await fetchJson("/api/model-channels/generate", {
-        method: "POST",
-        adminAuth: true,
-        body: JSON.stringify(payload),
-      });
-      state.modelChannelSettings = normalizeModelChannelSettingsForEditor(
-        response?.settings ?? payload.settings,
-      );
+      const baseSettings = buildModelChannelGeneratorBaseSettings();
+      const batchRaw = elements.modelChannelGenerateBatchTextarea?.value?.trim() || "";
+      let nextSettings = baseSettings;
+      const generatedChannelIds = [];
+      const generatedGroupIds = [];
+
+      if (batchRaw) {
+        const generators = parseBatchModelChannelGenerators(batchRaw);
+        for (const generator of generators) {
+          const response = await fetchJson("/api/model-channels/generate", {
+            method: "POST",
+            adminAuth: true,
+            body: JSON.stringify({
+              settings: nextSettings,
+              generator,
+            }),
+          });
+          nextSettings = normalizeModelChannelSettingsForEditor(response?.settings ?? nextSettings);
+          const channelIds = Array.isArray(response?.meta?.generatedChannelIds)
+            ? response.meta.generatedChannelIds
+            : [];
+          const groupId = String(response?.meta?.generatedGroupId || "").trim();
+          generatedChannelIds.push(...channelIds);
+          if (groupId) {
+            generatedGroupIds.push(groupId);
+          }
+        }
+      } else {
+        const payload = buildSingleModelChannelGeneratorPayload(baseSettings);
+        const response = await fetchJson("/api/model-channels/generate", {
+          method: "POST",
+          adminAuth: true,
+          body: JSON.stringify(payload),
+        });
+        nextSettings = normalizeModelChannelSettingsForEditor(response?.settings ?? payload.settings);
+        const channelIds = Array.isArray(response?.meta?.generatedChannelIds)
+          ? response.meta.generatedChannelIds
+          : [];
+        const groupId = String(response?.meta?.generatedGroupId || "").trim();
+        generatedChannelIds.push(...channelIds);
+        if (groupId) {
+          generatedGroupIds.push(groupId);
+        }
+      }
+
+      state.modelChannelSettings = nextSettings;
       state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
       if (elements.modelChannelsTextarea) {
         elements.modelChannelsTextarea.value = state.modelChannelSettingsText;
       }
       state.modelChannelEditorDirty = true;
       renderAll();
-      const generatedChannelIds = Array.isArray(response?.meta?.generatedChannelIds)
-        ? response.meta.generatedChannelIds
-        : [];
-      const generatedGroupId = String(response?.meta?.generatedGroupId || "").trim();
       const detailParts = [];
       if (generatedChannelIds.length > 0) {
         detailParts.push(`Generated channels: ${generatedChannelIds.join(", ")}`);
       }
-      if (generatedGroupId) {
-        detailParts.push(`Generated group: ${generatedGroupId}`);
+      if (generatedGroupIds.length > 0) {
+        detailParts.push(`Generated groups: ${generatedGroupIds.join(", ")}`);
       }
       detailParts.push("Draft updated. Click save to persist.");
       pushStatus("success", "Model channel JSON generated", detailParts.join(" "));

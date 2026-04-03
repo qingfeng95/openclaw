@@ -36,6 +36,9 @@ SKIP_INSTALL=0
 SKIP_APP_BUILD=0
 SKIP_UI_BUILD=0
 SKIP_WEB_BUILD=0
+RESTORE_TRACKED_FILES=(
+  "src/canvas-host/a2ui/.bundle.hash"
+)
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -72,6 +75,33 @@ done
 
 shared_deploy_assert_repo "$REPO_ROOT"
 
+restore_tracked_build_artifacts() {
+  local restored=0
+
+  if ! command -v git >/dev/null 2>&1; then
+    return
+  fi
+  if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return
+  fi
+
+  for rel_path in "${RESTORE_TRACKED_FILES[@]}"; do
+    if ! git -C "$REPO_ROOT" ls-files --error-unmatch "$rel_path" >/dev/null 2>&1; then
+      continue
+    fi
+    if git -C "$REPO_ROOT" diff --quiet -- "$rel_path"; then
+      continue
+    fi
+    git -C "$REPO_ROOT" restore --worktree -- "$rel_path"
+    restored=1
+    shared_deploy_log "restored tracked build artifact: $rel_path"
+  done
+
+  if [ "$restored" -eq 1 ]; then
+    shared_deploy_log "post-build tracked artifact cleanup completed"
+  fi
+}
+
 PNPM_CMD="${SHARED_CONSOLE_DEPLOY_PNPM_CMD:-$(shared_deploy_pnpm_cmd)}"
 if [ -n "${SHARED_CONSOLE_DEPLOY_INSTALL_CMD:-}" ]; then
   INSTALL_CMD="$SHARED_CONSOLE_DEPLOY_INSTALL_CMD"
@@ -103,5 +133,7 @@ fi
 if [ "$SKIP_WEB_BUILD" -ne 1 ]; then
   shared_deploy_run_in_repo "$REPO_ROOT" "$WEB_BUILD_CMD"
 fi
+
+restore_tracked_build_artifacts
 
 shared_deploy_log "build completed for commit $(shared_deploy_current_ref "$REPO_ROOT")"

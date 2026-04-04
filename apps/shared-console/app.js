@@ -2694,19 +2694,43 @@ renderModelChannelsPanel = function () {
   }
   elements.userModelConfigCheckbox.disabled = !adminEnabled;
   elements.modelChannelsTextarea.disabled = !adminEnabled;
-  elements.modelChannelGenerateBaseUrlInput?.disabled = !adminEnabled;
-  elements.modelChannelGenerateApiInput?.disabled = !adminEnabled;
-  elements.modelChannelGenerateIdPrefixInput?.disabled = !adminEnabled;
-  elements.modelChannelGenerateNamePrefixInput?.disabled = !adminEnabled;
-  elements.modelChannelGenerateApiKeysTextarea?.disabled = !adminEnabled;
-  elements.modelChannelGenerateModelsTextarea?.disabled = !adminEnabled;
-  elements.modelChannelGenerateBatchTextarea?.disabled = !adminEnabled;
-  elements.modelChannelGenerateReasoningCheckbox?.disabled = !adminEnabled;
-  elements.modelChannelGenerateImageInputCheckbox?.disabled = !adminEnabled;
-  elements.modelChannelGenerateRoundRobinCheckbox?.disabled = !adminEnabled;
+  if (elements.modelChannelGenerateBaseUrlInput) {
+    elements.modelChannelGenerateBaseUrlInput.disabled = !adminEnabled;
+  }
+  if (elements.modelChannelGenerateApiInput) {
+    elements.modelChannelGenerateApiInput.disabled = !adminEnabled;
+  }
+  if (elements.modelChannelGenerateIdPrefixInput) {
+    elements.modelChannelGenerateIdPrefixInput.disabled = !adminEnabled;
+  }
+  if (elements.modelChannelGenerateNamePrefixInput) {
+    elements.modelChannelGenerateNamePrefixInput.disabled = !adminEnabled;
+  }
+  if (elements.modelChannelGenerateApiKeysTextarea) {
+    elements.modelChannelGenerateApiKeysTextarea.disabled = !adminEnabled;
+  }
+  if (elements.modelChannelGenerateModelsTextarea) {
+    elements.modelChannelGenerateModelsTextarea.disabled = !adminEnabled;
+  }
+  if (elements.modelChannelGenerateBatchTextarea) {
+    elements.modelChannelGenerateBatchTextarea.disabled = !adminEnabled;
+  }
+  if (elements.modelChannelGenerateReasoningCheckbox) {
+    elements.modelChannelGenerateReasoningCheckbox.disabled = !adminEnabled;
+  }
+  if (elements.modelChannelGenerateImageInputCheckbox) {
+    elements.modelChannelGenerateImageInputCheckbox.disabled = !adminEnabled;
+  }
+  if (elements.modelChannelGenerateRoundRobinCheckbox) {
+    elements.modelChannelGenerateRoundRobinCheckbox.disabled = !adminEnabled;
+  }
   setModelChannelGenerateCardsDisabled(!adminEnabled);
-  elements.generateModelChannelsButton?.disabled = !adminEnabled;
-  elements.autoUnassignRemovedModelChannelsCheckbox?.disabled = !adminEnabled;
+  if (elements.generateModelChannelsButton) {
+    elements.generateModelChannelsButton.disabled = !adminEnabled;
+  }
+  if (elements.autoUnassignRemovedModelChannelsCheckbox) {
+    elements.autoUnassignRemovedModelChannelsCheckbox.disabled = !adminEnabled;
+  }
   elements.reloadModelChannelsButton.disabled = !adminEnabled;
   elements.saveModelChannelsButton.disabled = !adminEnabled;
 

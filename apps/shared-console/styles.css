@@ -156,6 +156,13 @@ body {
   border-radius: var(--radius-xl);
 }
 
+.hero.hero-compact {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 14px 18px;
+}
+
 .eyebrow,
 .section-kicker {
   margin: 0 0 8px;
@@ -176,6 +183,16 @@ body {
 .hero h1 {
   font-size: clamp(34px, 5vw, 62px);
   line-height: 0.95;
+}
+
+.hero.hero-compact h1 {
+  font-size: clamp(22px, 2.5vw, 30px);
+  line-height: 1.2;
+}
+
+.hero.hero-compact .eyebrow {
+  margin: 0;
+  font-size: 11px;
 }
 
 .hero-copy {
@@ -332,6 +349,23 @@ body {
 .inline-actions {
   display: flex;
   flex-wrap: wrap;
+  gap: 10px;
+}
+
+.control-panel {
+  padding: 16px;
+}
+
+.control-panel-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.3fr) auto minmax(260px, 1.1fr) auto auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.control-panel-notes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
 
@@ -754,6 +788,18 @@ body {
     overflow-x: auto;
   }
 
+  .control-panel-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .control-panel-grid > .button {
+    width: 100%;
+  }
+
+  .control-panel-notes {
+    grid-template-columns: 1fr;
+  }
+
   .summary-grid,
   .overview-grid,
   .main-grid,
@@ -773,6 +819,16 @@ body {
 @media (max-width: 820px) {
   .app-shell {
     padding: 18px 14px 40px;
+  }
+
+  .hero.hero-compact {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .control-panel-grid {
+    grid-template-columns: 1fr;
   }
 
   .workspace-tabs {

@@ -10,42 +10,9 @@
     <div class="background-glow background-glow-a"></div>
     <div class="background-glow background-glow-b"></div>
     <div class="app-shell">
-      <header class="hero">
-        <div>
-          <p class="eyebrow">CrewClaw 值班台</p>
-          <h1>共享实例值班总览</h1>
-          <p class="hero-copy">
-            这里展示的是共享实例的运行情况，可以理解为“共享池值班台”。
-            当前页面除了共享实例，也开始纳入单独实例和容器信息。值班管理员和运营人员可以在这里快速判断：
-            哪些实例能正常接单、哪些需要处理、实例现在跑在宿主机还是容器里，以及容器当前状态。
-          </p>
-        </div>
-        <div class="hero-controls">
-          <label class="field">
-            <span>API 地址</span>
-            <input id="api-base-input" type="text" spellcheck="false" />
-          </label>
-          <div class="inline-actions">
-            <button id="apply-api-base-button" class="button button-primary" type="button">
-              连接
-            </button>
-            <button id="refresh-button" class="button" type="button">刷新</button>
-          </div>
-          <label class="field">
-            <span>管理员口令</span>
-            <input id="admin-token-input" type="password" spellcheck="false" placeholder="输入后解锁管理员模式" />
-          </label>
-          <div class="inline-actions">
-            <button id="enable-admin-mode-button" class="button" type="button">进入管理员模式</button>
-            <button id="clear-admin-mode-button" class="button" type="button">退出管理员模式</button>
-          </div>
-          <label class="toggle">
-            <input id="auto-refresh-checkbox" type="checkbox" />
-            <span>15 秒自动刷新</span>
-          </label>
-          <p id="admin-mode-note" class="connection-note">当前未进入管理员模式。</p>
-          <p id="connection-note" class="connection-note">尚未加载数据。</p>
-        </div>
+      <header class="hero hero-compact">
+        <p class="eyebrow">CrewClaw 值班台</p>
+        <h1>CrewClaw 值班台</h1>
       </header>
 
       <div class="workspace-layout">
@@ -62,6 +29,33 @@
           <div id="tab-status-instances" class="tab-status-note hidden" data-tab-status="instances">本区暂无新状态。</div>
           <div id="tab-status-channels" class="tab-status-note hidden" data-tab-status="channels">本区暂无新状态。</div>
           <div id="tab-status-activity" class="tab-status-note hidden" data-tab-status="activity">本区暂无新状态。</div>
+
+      <section class="panel control-panel" data-tab-page="overview">
+        <div class="control-panel-grid">
+          <label class="field">
+            <span>API 地址</span>
+            <input id="api-base-input" type="text" spellcheck="false" />
+          </label>
+          <button id="apply-api-base-button" class="button button-primary" type="button">连接</button>
+          <label class="field">
+            <span>管理员口令</span>
+            <input id="admin-token-input" type="password" spellcheck="false" placeholder="输入后解锁管理员模式" />
+          </label>
+          <button id="enable-admin-mode-button" class="button" type="button">进入管理员模式</button>
+          <button id="clear-admin-mode-button" class="button" type="button">退出管理员模式</button>
+        </div>
+        <div class="inline-actions">
+          <button id="refresh-button" class="button" type="button">刷新</button>
+          <label class="toggle">
+            <input id="auto-refresh-checkbox" type="checkbox" />
+            <span>15 秒自动刷新</span>
+          </label>
+        </div>
+        <div class="control-panel-notes">
+          <p id="admin-mode-note" class="connection-note">当前未进入管理员模式。</p>
+          <p id="connection-note" class="connection-note">尚未加载数据。</p>
+        </div>
+      </section>
 
       <section class="summary-grid" id="summary-grid" data-tab-page="overview"></section>
 

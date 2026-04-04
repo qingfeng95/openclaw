@@ -1982,6 +1982,10 @@ async function handleCreateSubmit(event) {
   const runtimeKind =
     pool === "shared" ? "container" : body.runtimeKind === "container" ? "container" : "host";
   body.runtimeKind = runtimeKind;
+  if (!String(body.id || "").trim()) {
+    pushStatus("error", "新增实例失败", "实例 ID 不能为空。");
+    return;
+  }
   if (runtimeKind === "container" && !String(body.containerName || "").trim() && !String(body.containerId || "").trim()) {
     pushStatus("error", "新增实例失败", "部署位置选了已有容器时，至少要填写目标容器名或容器 ID。");
     return;
@@ -2203,6 +2207,20 @@ function bindEvents() {
   elements.createForm.addEventListener("submit", (event) => {
     void handleCreateSubmit(event);
   });
+  elements.createForm.addEventListener(
+    "invalid",
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      const fieldLabel =
+        target.closest("label")?.querySelector("span")?.textContent?.trim() || target.getAttribute("name") || "字段";
+      const validationMessage = "validationMessage" in target ? String(target.validationMessage || "") : "";
+      pushStatus("error", "新增实例失败", `${fieldLabel} 校验未通过${validationMessage ? `：${validationMessage}` : "。"} `);
+    },
+    true,
+  );
   elements.createForm.addEventListener("reset", () => {
     window.setTimeout(() => {
       syncCreateFormConstraints();

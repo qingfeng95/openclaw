@@ -1717,11 +1717,11 @@ async function runSelectedInstanceAction(action) {
         method: "POST",
       },
     );
-    pushStatus("success", `${actionLabel} ${state.selectedId} 鎴愬姛`, payload.command?.stdout || "鎿嶄綔瀹屾垚");
+    pushStatus("success", `${actionLabel} ${state.selectedId} 成功`, payload.command?.stdout || "操作完成");
     await loadInstances();
   } catch (error) {
-    pushStatus("error", `${actionLabel} ${state.selectedId} 澶辫触`, error.message);
-    updateConnectionNote(`${actionLabel} 澶辫触锛?{error.message}`, true);
+    pushStatus("error", `${actionLabel} ${state.selectedId} 失败`, error.message);
+    updateConnectionNote(`${actionLabel} 失败：${error.message}`, true);
   } finally {
     setBusy(false);
   }
@@ -2284,15 +2284,15 @@ loadModelChannelConfig = function ({ announce = false } = {}) {
       state.modelChannelSettingsText = "";
       state.modelChannelEditorDirty = false;
     }
-      if (announce) {
-        pushStatus(
-          "info",
-          "Model channels loaded",
-          `${state.modelChannelCatalog.channels.length} channel routes, user model config ${
-            state.modelChannelCatalog.userCanConfigureModels ? "enabled" : "disabled"
-          }`,
-        );
-      }
+    if (announce) {
+      pushStatus(
+        "info",
+        "已加载模型渠道配置",
+        `${state.modelChannelCatalog.channels.length} 个渠道，用户自配模型：${
+          state.modelChannelCatalog.userCanConfigureModels ? "开启" : "关闭"
+        }`,
+      );
+    }
     return payload;
   })();
 };
@@ -2303,10 +2303,10 @@ buildModelChannelSettingsDraft = function () {
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    throw new Error(`Invalid JSON: ${error.message}`);
+    throw new Error(`JSON 解析失败：${error.message}`);
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Model channel settings must be a JSON object.");
+    throw new Error("模型渠道配置必须是 JSON 对象。");
   }
   return {
     ...parsed,
@@ -2496,15 +2496,15 @@ function collectBatchCardModelChannelGenerators() {
       continue;
     }
     if (!channelNamePrefix || !channelIdPrefix || !baseUrl || !modelIdsRaw || !apiKeysRaw) {
-      throw new Error(`Card ${index + 1} is missing required fields.`);
+      throw new Error(`卡片 ${index + 1} 缺少必填字段。`);
     }
     const modelIds = splitModelChannelGeneratorList(modelIdsRaw);
     const apiKeys = splitModelChannelGeneratorList(apiKeysRaw);
     if (modelIds.length === 0) {
-      throw new Error(`Card ${index + 1} must include at least one model id.`);
+      throw new Error(`卡片 ${index + 1} 至少需要填写一个模型 ID。`);
     }
     if (apiKeys.length === 0) {
-      throw new Error(`Card ${index + 1} must include at least one API key.`);
+      throw new Error(`卡片 ${index + 1} 至少需要填写一个 API Key。`);
     }
     generators.push({
       baseUrl,
@@ -2544,19 +2544,19 @@ function parseBatchModelChannelGenerators(raw) {
   return lines.map((line, index) => {
     const parts = line.split("|").map((part) => part.trim());
     if (parts.length < 5 || parts.length > 6) {
-      throw new Error(`Batch line ${index + 1} must contain 5 or 6 "|" separated columns.`);
+      throw new Error(`批量定义第 ${index + 1} 行必须包含 5 列或 6 列，用 "|" 分隔。`);
     }
     const [channelNamePrefix, channelIdPrefix, baseUrl, modelIdsRaw, apiKeysRaw, apiRaw] = parts;
     if (!channelNamePrefix || !channelIdPrefix || !baseUrl || !modelIdsRaw || !apiKeysRaw) {
-      throw new Error(`Batch line ${index + 1} is missing required fields.`);
+      throw new Error(`批量定义第 ${index + 1} 行缺少必填字段。`);
     }
     const modelIds = splitModelChannelGeneratorList(modelIdsRaw);
     const apiKeys = splitModelChannelGeneratorList(apiKeysRaw);
     if (modelIds.length === 0) {
-      throw new Error(`Batch line ${index + 1} must include at least one model id.`);
+      throw new Error(`批量定义第 ${index + 1} 行至少需要填写一个模型 ID。`);
     }
     if (apiKeys.length === 0) {
-      throw new Error(`Batch line ${index + 1} must include at least one API key.`);
+      throw new Error(`批量定义第 ${index + 1} 行至少需要填写一个 API Key。`);
     }
     return {
       baseUrl,
@@ -2592,7 +2592,7 @@ async function updateSelectedInstanceModelChannel(modelChannelId) {
     return;
   }
   if (!isAdminModeEnabled()) {
-    pushStatus("error", "Save failed", "Enter admin mode first.");
+    pushStatus("error", "保存失败", "请先进入管理员模式。");
     return;
   }
   setBusy(true);
@@ -2603,13 +2603,13 @@ async function updateSelectedInstanceModelChannel(modelChannelId) {
     });
     pushStatus(
       "success",
-      "Instance model channel updated",
+      "实例模型渠道已更新",
       `${state.selectedId} -> ${formatModelChannelLabel(modelChannelId || "")}`,
     );
     await loadInstances({ preserveSelection: true });
   } catch (error) {
-    pushStatus("error", "Instance model channel update failed", error.message);
-    updateConnectionNote(`Save failed: ${error.message}`, true);
+    pushStatus("error", "实例模型渠道更新失败", error.message);
+    updateConnectionNote(`保存失败：${error.message}`, true);
   } finally {
     setBusy(false);
   }
@@ -2658,17 +2658,17 @@ renderModelChannelsPanel = function () {
 
   if (!state.adminModeAvailable) {
     elements.modelChannelsPanel.textContent =
-      "Server admin mode is disabled, so global model-channel management is unavailable.";
+      "当前服务端未启用管理员模式，无法管理全局模型渠道。";
     return;
   }
   if (!adminEnabled) {
     elements.modelChannelsPanel.textContent =
-      "Enter admin mode to maintain global model channels and choose whether users can configure models.";
+      "进入管理员模式后，可统一维护全局模型渠道，并决定用户是否允许自己配置模型。";
     return;
   }
-  elements.modelChannelsPanel.textContent = `Global channels: ${state.modelChannelCatalog.channels.length}. User model config: ${
-    state.modelChannelCatalog.userCanConfigureModels ? "enabled" : "disabled"
-  }. Saving will rewrite mapped instance configs; running mapped instances need restart to pick up route changes. Removing a channel can also auto-unassign mapped instances.`;
+  elements.modelChannelsPanel.textContent = `当前共 ${state.modelChannelCatalog.channels.length} 个渠道；用户自配模型：${
+    state.modelChannelCatalog.userCanConfigureModels ? "开启" : "关闭"
+  }。保存全局渠道后，已映射实例的配置文件会同步更新；运行中的实例需要重启后生效。删除渠道时也可自动解除实例映射。`;
 };
 
 renderMetaGrid = function (item) {
@@ -2834,14 +2834,14 @@ clearAdminMode = function () {
   updateAdminModeUi();
   renderAll();
   void loadInstances({ preserveSelection: true });
-  pushStatus("info", "Admin mode cleared");
+  pushStatus("info", "已退出管理员模式");
 };
 
 function handleModelChannelsSubmit(event) {
   return (async () => {
     event.preventDefault();
     if (!isAdminModeEnabled()) {
-      pushStatus("error", "Save failed", "Enter admin mode first.");
+      pushStatus("error", "保存失败", "请先进入管理员模式。");
       return;
     }
     setBusy(true);
@@ -2864,17 +2864,17 @@ function handleModelChannelsSubmit(event) {
       renderAll();
       pushStatus(
         "success",
-        "Global model channels saved",
+        "全局模型渠道已保存",
         formatModelChannelSaveDetail(payload),
       );
       await loadInstances({ preserveSelection: true });
     } catch (error) {
       const detail = String(error?.message || "");
       const hint = detail.includes("Cannot remove channels that are still assigned to instances")
-        ? `${detail} Enable auto-unassign or clear the instance mapping first.`
+        ? `${detail} 可启用自动解除映射，或先手动清空对应实例的渠道映射。`
         : detail;
-      pushStatus("error", "Global model channel save failed", hint);
-      updateConnectionNote(`Save failed: ${error.message}`, true);
+      pushStatus("error", "全局模型渠道保存失败", hint);
+      updateConnectionNote(`保存失败：${error.message}`, true);
     } finally {
       setBusy(false);
     }
@@ -2884,7 +2884,7 @@ function handleModelChannelsSubmit(event) {
 function handleModelChannelGenerateSubmit() {
   return (async () => {
     if (!isAdminModeEnabled()) {
-      pushStatus("error", "Generate failed", "Enter admin mode first.");
+      pushStatus("error", "生成失败", "请先进入管理员模式。");
       return;
     }
     setBusy(true);
@@ -2945,16 +2945,16 @@ function handleModelChannelGenerateSubmit() {
       renderAll();
       const detailParts = [];
       if (generatedChannelIds.length > 0) {
-        detailParts.push(`Generated channels: ${generatedChannelIds.join(", ")}`);
+        detailParts.push(`已生成渠道：${generatedChannelIds.join(", ")}`);
       }
       if (generatedGroupIds.length > 0) {
-        detailParts.push(`Generated groups: ${generatedGroupIds.join(", ")}`);
+        detailParts.push(`已生成轮询组：${generatedGroupIds.join(", ")}`);
       }
-      detailParts.push("Draft updated. Click save to persist.");
-      pushStatus("success", "Model channel JSON generated", detailParts.join(" "));
+      detailParts.push("JSON 草稿已更新，点击保存即可持久化。");
+      pushStatus("success", "模型渠道 JSON 草稿已生成", detailParts.join(" "));
     } catch (error) {
-      pushStatus("error", "Model channel generation failed", error.message);
-      updateConnectionNote(`Generate failed: ${error.message}`, true);
+      pushStatus("error", "模型渠道生成失败", error.message);
+      updateConnectionNote(`生成失败：${error.message}`, true);
     } finally {
       setBusy(false);
     }
@@ -2973,7 +2973,8 @@ function bindModelChannelEvents() {
   elements.modelChannelsForm?.addEventListener("submit", (event) => {
     void handleModelChannelsSubmit(event);
   });
-  elements.addModelChannelGenerateCardButton?.addEventListener("click", () => {
+  elements.addModelChannelGenerateCardButton?.addEventListener("click", (event) => {
+    event.preventDefault();
     const card = appendModelChannelGenerateCard(buildModelChannelGenerateCardDefaultValues());
     card?.querySelector('[data-field="channelNamePrefix"]')?.focus();
   });
@@ -3006,7 +3007,7 @@ function bindModelChannelEvents() {
     void loadModelChannelConfig({ announce: true })
       .then(() => renderAll())
       .catch((error) => {
-        pushStatus("error", "Reload failed", error.message);
+        pushStatus("error", "重新加载失败", error.message);
       });
   });
   elements.detailModelChannelForm?.addEventListener("submit", (event) => {

@@ -2234,6 +2234,9 @@ function bindInstanceSelection(container, failureTitle) {
 
 function bindEvents() {
   elements.workspaceTabs?.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) {
+      return;
+    }
     const button = event.target.closest("[data-tab]");
     if (!(button instanceof HTMLElement)) {
       return;
@@ -2244,6 +2247,15 @@ function bindEvents() {
     }
     setActiveTab(tab);
   });
+  for (const tabButton of elements.workspaceTabs?.querySelectorAll("[data-tab]") ?? []) {
+    tabButton.addEventListener("click", () => {
+      const tab = tabButton.getAttribute("data-tab");
+      if (!tab) {
+        return;
+      }
+      setActiveTab(tab);
+    });
+  }
   elements.applyApiBaseButton.addEventListener("click", () => {
     void applyApiBase(elements.apiBaseInput.value);
   });

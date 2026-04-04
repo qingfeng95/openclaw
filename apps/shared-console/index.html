@@ -48,9 +48,24 @@
         </div>
       </header>
 
-      <section class="summary-grid" id="summary-grid"></section>
+      <div class="workspace-layout">
+        <aside class="workspace-tabs" id="workspace-tabs">
+          <button class="tab-button" type="button" data-tab="overview">运行总览</button>
+          <button class="tab-button" type="button" data-tab="containers">容器管理</button>
+          <button class="tab-button" type="button" data-tab="instances">实例管理</button>
+          <button class="tab-button" type="button" data-tab="channels">渠道管理</button>
+          <button class="tab-button" type="button" data-tab="activity">操作日志</button>
+        </aside>
+        <div class="workspace-content">
+          <div id="tab-status-overview" class="tab-status-note" data-tab-status="overview">本区暂无新状态。</div>
+          <div id="tab-status-containers" class="tab-status-note hidden" data-tab-status="containers">本区暂无新状态。</div>
+          <div id="tab-status-instances" class="tab-status-note hidden" data-tab-status="instances">本区暂无新状态。</div>
+          <div id="tab-status-channels" class="tab-status-note hidden" data-tab-status="channels">本区暂无新状态。</div>
+          <div id="tab-status-activity" class="tab-status-note hidden" data-tab-status="activity">本区暂无新状态。</div>
 
-      <section class="overview-grid">
+      <section class="summary-grid" id="summary-grid" data-tab-page="overview"></section>
+
+      <section class="overview-grid" data-tab-page="overview">
         <section class="panel overview-panel">
           <div class="panel-header">
             <div>
@@ -72,7 +87,7 @@
         </section>
       </section>
 
-      <section class="panel containers-section">
+      <section class="panel containers-section" data-tab-page="containers">
         <div class="panel-header">
           <div>
             <p class="section-kicker">容器总览</p>
@@ -110,7 +125,7 @@
         </div>
       </section>
 
-      <section class="panel">
+      <section class="panel" data-tab-page="channels">
         <div class="panel-header">
           <div>
             <p class="section-kicker">模型渠道</p>
@@ -259,7 +274,7 @@
         </form>
       </section>
 
-      <main class="main-grid">
+      <main class="main-grid" data-tab-page="instances">
         <section class="panel panel-list">
           <div class="panel-header">
             <div>
@@ -415,7 +430,8 @@
             </label>
             <label class="field">
               <span>监听地址</span>
-              <input name="bind" type="text" placeholder="127.0.0.1" />
+              <input name="bind" type="text" placeholder="loopback / lan / tailnet / auto / custom" />
+              <small class="field-note">输入 127.0.0.1 或 localhost 会自动转换为 loopback。</small>
             </label>
             <label class="field">
               <span>目标容器名</span>
@@ -440,7 +456,7 @@
         </section>
       </main>
 
-      <section class="panel dedicated-section">
+      <section class="panel dedicated-section" data-tab-page="instances">
         <div class="panel-header">
           <div>
             <p class="section-kicker">单独实例</p>
@@ -450,7 +466,7 @@
         <div id="dedicated-instances-list" class="instances-list"></div>
       </section>
 
-      <section class="status-panel">
+      <section class="status-panel" data-tab-page="activity">
         <div class="panel-header">
           <div>
             <p class="section-kicker">最近动态</p>
@@ -459,6 +475,8 @@
         </div>
         <div id="status-feed" class="status-feed"></div>
       </section>
+        </div>
+      </div>
     </div>
 
     <script type="module" src="./app.js"></script>

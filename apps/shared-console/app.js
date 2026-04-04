@@ -2,6 +2,7 @@ const DEFAULT_API_PORT = "43100";
 const API_BASE_STORAGE_KEY = "crewclaw.sharedConsole.apiBase";
 const AUTO_REFRESH_STORAGE_KEY = "crewclaw.sharedConsole.autoRefresh";
 const ADMIN_TOKEN_STORAGE_KEY = "crewclaw.sharedConsole.adminToken";
+const TAB_STORAGE_KEY = "crewclaw.sharedConsole.activeTab";
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
 const STATUS_LIMIT = 14;
 
@@ -31,6 +32,7 @@ const state = {
   modelChannelSettingsText: "",
   modelChannelEditorDirty: false,
   filter: "",
+  activeTab: "overview",
   busy: false,
   timerId: null,
   lastLoadedAt: null,
@@ -45,6 +47,8 @@ const elements = {
   adminModeNote: document.querySelector("#admin-mode-note"),
   refreshButton: document.querySelector("#refresh-button"),
   autoRefreshCheckbox: document.querySelector("#auto-refresh-checkbox"),
+  workspaceTabs: document.querySelector("#workspace-tabs"),
+  tabStatusNotes: Array.from(document.querySelectorAll("[data-tab-status]")),
   connectionNote: document.querySelector("#connection-note"),
   summaryGrid: document.querySelector("#summary-grid"),
   watchlistPanel: document.querySelector("#watchlist-panel"),
@@ -128,6 +132,14 @@ function resolveDefaultApiBase() {
 
 function resolveStoredAdminToken() {
   return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)?.trim() || "";
+}
+
+function resolveStoredActiveTab() {
+  const stored = localStorage.getItem(TAB_STORAGE_KEY)?.trim();
+  if (stored && ["overview", "containers", "instances", "channels", "activity"].includes(stored)) {
+    return stored;
+  }
+  return "overview";
 }
 
 function defaultModelChannelSettings() {
@@ -363,6 +375,30 @@ function instanceRuntimeDescription(item) {
       : "当前被标记为容器运行，但还没有容器名称";
   }
   return "当前直接运行在宿主机上";
+}
+
+function setActiveTab(nextTab, { persist = true } = {}) {
+  const tab = ["overview", "containers", "instances", "channels", "activity"].includes(nextTab)
+    ? nextTab
+    : "overview";
+  state.activeTab = tab;
+  if (persist) {
+    localStorage.setItem(TAB_STORAGE_KEY, tab);
+  }
+  const tabButtons = elements.workspaceTabs?.querySelectorAll("[data-tab]") ?? [];
+  for (const button of tabButtons) {
+    const isActive = button.getAttribute("data-tab") === tab;
+    button.classList.toggle("active", isActive);
+  }
+  const tabPages = document.querySelectorAll("[data-tab-page]");
+  for (const page of tabPages) {
+    const shouldShow = page.getAttribute("data-tab-page") === tab;
+    page.classList.toggle("hidden", !shouldShow);
+  }
+  for (const note of elements.tabStatusNotes) {
+    const shouldShow = note.getAttribute("data-tab-status") === tab;
+    note.classList.toggle("hidden", !shouldShow);
+  }
 }
 
 function buildFallbackContainerMeta(instances, error = null) {
@@ -709,7 +745,22 @@ function buildModelChannelSettingsDraft() {
   };
 }
 
-function pushStatus(kind, title, detail = "") {
+function updateTabStatus(kind, title, detail = "", tab = state.activeTab) {
+  const note = elements.tabStatusNotes.find((item) => item.getAttribute("data-tab-status") === tab);
+  if (!note) {
+    return;
+  }
+  note.classList.remove("success", "error");
+  if (kind === "success") {
+    note.classList.add("success");
+  } else if (kind === "error") {
+    note.classList.add("error");
+  }
+  note.textContent = `${title}${detail ? `：${detail}` : ""}`;
+}
+
+function pushStatus(kind, title, detail = "", tab = state.activeTab) {
+  updateTabStatus(kind, title, detail, tab);
   const node = document.createElement("article");
   node.className = "status-item";
   node.innerHTML = `
@@ -1134,6 +1185,23 @@ function syncCreateFormConstraints() {
     elements.createRuntimeKindNote.textContent =
       "单独实例可按需选择已有容器或宿主机运行。";
   }
+}
+
+function normalizeBindModeInput(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) {
+    return "";
+  }
+  if (raw === "127.0.0.1" || raw === "localhost" || raw === "loopback") {
+    return "loopback";
+  }
+  if (raw === "0.0.0.0" || raw === "lan" || raw === "all" || raw === "any") {
+    return "lan";
+  }
+  if (raw === "tailnet" || raw === "auto" || raw === "custom") {
+    return raw;
+  }
+  return raw;
 }
 
 function renderContainerLogs() {
@@ -1982,6 +2050,7 @@ async function handleCreateSubmit(event) {
   const runtimeKind =
     pool === "shared" ? "container" : body.runtimeKind === "container" ? "container" : "host";
   body.runtimeKind = runtimeKind;
+  body.bind = normalizeBindModeInput(body.bind);
   if (!String(body.id || "").trim()) {
     pushStatus("error", "新增实例失败", "实例 ID 不能为空。");
     return;
@@ -2164,6 +2233,17 @@ function bindInstanceSelection(container, failureTitle) {
 }
 
 function bindEvents() {
+  elements.workspaceTabs?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-tab]");
+    if (!(button instanceof HTMLElement)) {
+      return;
+    }
+    const tab = button.getAttribute("data-tab");
+    if (!tab) {
+      return;
+    }
+    setActiveTab(tab);
+  });
   elements.applyApiBaseButton.addEventListener("click", () => {
     void applyApiBase(elements.apiBaseInput.value);
   });
@@ -3157,6 +3237,7 @@ async function init() {
   await loadRuntimeConfig();
   await hydrateSelectionFromHash();
   state.adminModeAvailable = window.__SHARED_CONSOLE_CONFIG__?.adminModeAvailable === true;
+  state.activeTab = resolveStoredActiveTab();
   state.apiBase = resolveDefaultApiBase();
   state.adminToken = resolveStoredAdminToken();
   elements.apiBaseInput.value = state.apiBase;
@@ -3164,6 +3245,7 @@ async function init() {
   elements.autoRefreshCheckbox.checked = localStorage.getItem(AUTO_REFRESH_STORAGE_KEY) === "1";
   elements.statusFeed.innerHTML = "";
   bindEvents();
+  setActiveTab(state.activeTab, { persist: false });
   bindModelChannelEvents();
   ensureModelChannelGenerateCardsInitialized();
   syncCreateFormConstraints();

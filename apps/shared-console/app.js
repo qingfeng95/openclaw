@@ -2039,7 +2039,8 @@ async function runContainerAction(action, containerName) {
 
 async function handleCreateSubmit(event) {
   event.preventDefault();
-  const formData = new FormData(event.currentTarget);
+  const form = event.currentTarget;
+  const formData = new FormData(form);
   const body = Object.fromEntries(
     [...formData.entries()].filter(
       ([, value]) =>
@@ -2071,7 +2072,7 @@ async function handleCreateSubmit(event) {
       `新增${instanceScopeLabel(pool)} ${payload.item?.id} 成功`,
       payload.command?.stdout || "实例已写入",
     );
-    event.currentTarget.reset();
+    form.reset();
     syncCreateFormConstraints();
     state.selectedScope = pool;
     state.selectedId = payload.item?.id ?? null;
@@ -2086,7 +2087,8 @@ async function handleCreateSubmit(event) {
 
 async function handleCreateContainerSubmit(event) {
   event.preventDefault();
-  const formData = new FormData(event.currentTarget);
+  const form = event.currentTarget;
+  const formData = new FormData(form);
   const rawBody = Object.fromEntries(
     [...formData.entries()].filter(
       ([, value]) => (typeof value === "string" ? String(value).trim() !== "" : true),
@@ -2127,7 +2129,7 @@ async function handleCreateContainerSubmit(event) {
       `创建容器成功 ${createdNames.length || payload.request?.names?.length || count} 个`,
       createdNames.join(", ") || payload.command?.stdout || "容器已创建",
     );
-    event.currentTarget.reset();
+    form.reset();
     await loadInstances({ preserveSelection: true });
     if (createdNames[0]) {
       await loadContainerLogs(createdNames[0], { announce: false });

@@ -125,88 +125,103 @@
             <input id="user-model-config-checkbox" type="checkbox" />
             <span>允许用户自己配置模型与渠道</span>
           </label>
-          <label class="field">
-            <span>渠道 URL</span>
-            <input
-              id="model-channel-generate-base-url"
-              type="text"
-              spellcheck="false"
-              placeholder="https://api.openai.com/v1"
-            />
-          </label>
-          <label class="field">
-            <span>API 类型</span>
-            <input
-              id="model-channel-generate-api"
-              type="text"
-              spellcheck="false"
-              value="openai-responses"
-            />
-          </label>
-          <label class="field">
-            <span>渠道 ID 前缀</span>
-            <input
-              id="model-channel-generate-id-prefix"
-              type="text"
-              spellcheck="false"
-              placeholder="openai-main"
-            />
-            <small class="field-note">留空时按 URL 主机名自动生成。</small>
-          </label>
-          <label class="field">
-            <span>渠道名称前缀</span>
-            <input
-              id="model-channel-generate-name-prefix"
-              type="text"
-              spellcheck="false"
-              placeholder="OpenAI Main"
-            />
-          </label>
-          <label class="field" style="grid-column: 1 / -1;">
-            <span>API Key（每行一个）</span>
-            <textarea
-              id="model-channel-generate-api-keys"
-              rows="3"
-              spellcheck="false"
-              placeholder="sk-xxx"
-            ></textarea>
-            <small class="field-note">填多个 key 时可一并生成多个渠道和轮询组。</small>
-          </label>
-          <label class="field" style="grid-column: 1 / -1;">
-            <span>模型 ID（每行一个）</span>
-            <textarea
-              id="model-channel-generate-models"
-              rows="3"
-              spellcheck="false"
-              placeholder="gpt-5-mini"
-            ></textarea>
-          </label>
-          <label class="field" style="grid-column: 1 / -1;">
-            <span>多渠道 + 多个 Key 批量定义（可选）</span>
-            <textarea
-              id="model-channel-generate-batch-textarea"
-              rows="6"
-              spellcheck="false"
-              placeholder="OpenAI Main | openai-main | https://api.openai.com/v1 | gpt-5-mini | sk-a,sk-b"
-            ></textarea>
-            <small class="field-note">
-              如果填写了这个批量区块，生成器会按行依次生成。格式：名称前缀 | ID 前缀 | URL | 模型1,模型2 | Key1,Key2 | API（可选）
-            </small>
-          </label>
-          <div class="detail-card generator-card-collection" style="grid-column: 1 / -1;">
+          <section class="detail-card model-generator-quick" style="grid-column: 1 / -1;">
+            <div class="detail-card-header">
+              <h3>快速生成（单渠道多 Key）</h3>
+            </div>
+            <div class="model-generator-grid">
+              <label class="field">
+                <span>渠道 URL</span>
+                <input
+                  id="model-channel-generate-base-url"
+                  type="text"
+                  spellcheck="false"
+                  placeholder="https://api.openai.com/v1"
+                />
+              </label>
+              <label class="field">
+                <span>API 类型</span>
+                <input
+                  id="model-channel-generate-api"
+                  type="text"
+                  spellcheck="false"
+                  value="openai-responses"
+                />
+              </label>
+              <label class="field">
+                <span>渠道 ID 前缀</span>
+                <input
+                  id="model-channel-generate-id-prefix"
+                  type="text"
+                  spellcheck="false"
+                  placeholder="openai-main"
+                />
+                <small class="field-note">留空时按 URL 主机名自动生成。</small>
+              </label>
+              <label class="field">
+                <span>渠道名称前缀</span>
+                <input
+                  id="model-channel-generate-name-prefix"
+                  type="text"
+                  spellcheck="false"
+                  placeholder="OpenAI Main"
+                />
+              </label>
+              <label class="field field-span-2">
+                <span>模型 ID（每行一个）</span>
+                <textarea
+                  id="model-channel-generate-models"
+                  rows="2"
+                  spellcheck="false"
+                  placeholder="gpt-5-mini"
+                ></textarea>
+              </label>
+              <label class="field field-span-2">
+                <span>API Key（每行一个）</span>
+                <textarea
+                  id="model-channel-generate-api-keys"
+                  rows="2"
+                  spellcheck="false"
+                  placeholder="sk-xxx"
+                ></textarea>
+                <small class="field-note">填多个 key 时可一并生成多个渠道和轮询组。</small>
+              </label>
+            </div>
+          </section>
+          <section class="detail-card generator-card-collection" style="grid-column: 1 / -1;">
             <div class="generator-card-header">
               <div>
-                <h3>批量渠道卡片</h3>
+                <h3>多渠道卡片工作台</h3>
                 <p class="field-note">
-                  推荐给多渠道、多 key 场景。只要下面任一卡片里有内容，就优先按卡片生成；上面的批量文本框保留为兼容模式。
+                  推荐用于多渠道、多 key 场景。可以先在上方“快速生成”里填默认值，再新增卡片逐个微调。
                 </p>
               </div>
-              <button id="add-model-channel-generate-card-button" class="button" type="button">
-                新增一张卡片
-              </button>
+              <div class="inline-actions">
+                <button id="add-model-channel-generate-card-button" class="button" type="button">
+                  新增卡片
+                </button>
+                <button id="import-model-channel-batch-button" class="button" type="button">
+                  文本转卡片
+                </button>
+                <button id="clear-model-channel-cards-button" class="button" type="button">
+                  清空卡片
+                </button>
+              </div>
             </div>
+            <label class="field">
+              <span>兼容文本导入（可选）</span>
+              <textarea
+                id="model-channel-generate-batch-textarea"
+                rows="4"
+                spellcheck="false"
+                placeholder="OpenAI Main | openai-main | https://api.openai.com/v1 | gpt-5-mini | sk-a,sk-b"
+              ></textarea>
+              <small class="field-note">
+                格式：名称前缀 | ID 前缀 | URL | 模型1,模型2 | Key1,Key2 | API（可选）
+              </small>
+            </label>
             <div id="model-channel-generate-cards" class="generator-cards"></div>
-          </div>
+          </section>
           <div class="inline-actions" style="grid-column: 1 / -1;">
             <label class="toggle">
               <input id="model-channel-generate-reasoning" type="checkbox" checked />

@@ -516,6 +516,17 @@ body {
   font-size: 18px;
 }
 
+.model-generator-quick,
+.generator-card-collection {
+  gap: 12px;
+}
+
+.model-generator-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .generator-card-collection {
   gap: 14px;
 }
@@ -525,6 +536,10 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.generator-card-header .inline-actions {
+  justify-content: flex-end;
 }
 
 .generator-cards {
@@ -682,6 +697,7 @@ body {
     padding: 18px 14px 40px;
   }
 
+  .model-generator-grid,
   .generator-card-header,
   .generator-card-grid {
     grid-template-columns: 1fr;

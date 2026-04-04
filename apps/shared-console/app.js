@@ -83,6 +83,8 @@ const elements = {
   modelChannelGenerateModelsTextarea: document.querySelector("#model-channel-generate-models"),
   modelChannelGenerateBatchTextarea: document.querySelector("#model-channel-generate-batch-textarea"),
   addModelChannelGenerateCardButton: document.querySelector("#add-model-channel-generate-card-button"),
+  importModelChannelBatchButton: document.querySelector("#import-model-channel-batch-button"),
+  clearModelChannelCardsButton: document.querySelector("#clear-model-channel-cards-button"),
   modelChannelGenerateCards: document.querySelector("#model-channel-generate-cards"),
   modelChannelGenerateReasoningCheckbox: document.querySelector("#model-channel-generate-reasoning"),
   modelChannelGenerateImageInputCheckbox: document.querySelector("#model-channel-generate-image-input"),
@@ -2362,15 +2364,21 @@ function renumberModelChannelGenerateCards() {
   getModelChannelGenerateCards().forEach((card, index) => {
     const title = card.querySelector("[data-model-channel-generate-card-title]");
     if (title) {
-      title.textContent = `配置 ${index + 1}`;
+      const name = readModelChannelGenerateCardField(card, "channelNamePrefix");
+      const id = readModelChannelGenerateCardField(card, "channelIdPrefix");
+      const summary = name || id;
+      title.textContent = summary ? `配置 ${index + 1} · ${summary}` : `配置 ${index + 1}`;
     }
   });
 }
 
 function buildModelChannelGenerateCardDefaultValues() {
   return {
+    channelNamePrefix: elements.modelChannelGenerateNamePrefixInput?.value?.trim() || "",
+    channelIdPrefix: elements.modelChannelGenerateIdPrefixInput?.value?.trim() || "",
     baseUrl: elements.modelChannelGenerateBaseUrlInput?.value?.trim() || "",
     api: elements.modelChannelGenerateApiInput?.value?.trim() || "",
+    apiKeys: elements.modelChannelGenerateApiKeysTextarea?.value?.trim() || "",
     modelIds: elements.modelChannelGenerateModelsTextarea?.value?.trim() || "",
   };
 }
@@ -2388,6 +2396,9 @@ function createModelChannelGenerateCard(values = {}) {
     <div class="generator-card-header">
       <p class="generator-card-title" data-model-channel-generate-card-title>配置</p>
       <div class="inline-actions">
+        <button class="button" type="button" data-action="duplicate-model-channel-generate-card">
+          复制卡片
+        </button>
         <button class="button" type="button" data-action="remove-model-channel-generate-card">
           删除此卡片
         </button>
@@ -2467,6 +2478,16 @@ function appendModelChannelGenerateCard(values = {}) {
   return card;
 }
 
+function clearModelChannelGenerateCards({ keepOneBlank = true } = {}) {
+  if (!elements.modelChannelGenerateCards) {
+    return;
+  }
+  elements.modelChannelGenerateCards.innerHTML = "";
+  if (keepOneBlank) {
+    appendModelChannelGenerateCard();
+  }
+}
+
 function ensureModelChannelGenerateCardsInitialized() {
   if (!elements.modelChannelGenerateCards) {
     return;
@@ -2525,6 +2546,12 @@ function setModelChannelGenerateCardsDisabled(disabled) {
   if (elements.addModelChannelGenerateCardButton) {
     elements.addModelChannelGenerateCardButton.disabled = disabled;
   }
+  if (elements.importModelChannelBatchButton) {
+    elements.importModelChannelBatchButton.disabled = disabled;
+  }
+  if (elements.clearModelChannelCardsButton) {
+    elements.clearModelChannelCardsButton.disabled = disabled;
+  }
   const controls =
     elements.modelChannelGenerateCards?.querySelectorAll("input, textarea, button") ?? [];
   for (const control of controls) {
@@ -2570,6 +2597,33 @@ function parseBatchModelChannelGenerators(raw) {
       createRoundRobinGroup: sharedOptions.createRoundRobinGroup,
     };
   });
+}
+
+function importBatchModelChannelGeneratorsAsCards(raw) {
+  const generators = parseBatchModelChannelGenerators(raw);
+  if (generators.length === 0) {
+    return 0;
+  }
+  const cards = getModelChannelGenerateCards();
+  const onlyBlankCard =
+    cards.length === 1 &&
+    ["channelNamePrefix", "channelIdPrefix", "baseUrl", "api", "modelIds", "apiKeys"].every(
+      (field) => !readModelChannelGenerateCardField(cards[0], field),
+    );
+  if (onlyBlankCard) {
+    clearModelChannelGenerateCards({ keepOneBlank: false });
+  }
+  for (const item of generators) {
+    appendModelChannelGenerateCard({
+      channelNamePrefix: item.channelNamePrefix,
+      channelIdPrefix: item.channelIdPrefix,
+      baseUrl: item.baseUrl,
+      api: item.api,
+      modelIds: Array.isArray(item.modelIds) ? item.modelIds.join("\n") : "",
+      apiKeys: Array.isArray(item.apiKeys) ? item.apiKeys.join("\n") : "",
+    });
+  }
+  return generators.length;
 }
 
 function formatModelChannelSaveDetail(payload) {
@@ -2982,17 +3036,53 @@ function bindModelChannelEvents() {
     if (!(event.target instanceof Element)) {
       return;
     }
-    const removeButton = event.target.closest('[data-action="remove-model-channel-generate-card"]');
-    if (!removeButton) {
+    const actionButton = event.target.closest("[data-action]");
+    if (!actionButton) {
       return;
     }
-    const card = removeButton.closest(".generator-card");
+    const card = actionButton.closest(".generator-card");
     if (!card) {
       return;
     }
-    card.remove();
-    ensureModelChannelGenerateCardsInitialized();
+    const action = actionButton.getAttribute("data-action");
+    if (action === "remove-model-channel-generate-card") {
+      card.remove();
+      ensureModelChannelGenerateCardsInitialized();
+      renumberModelChannelGenerateCards();
+      return;
+    }
+    if (action === "duplicate-model-channel-generate-card") {
+      const duplicate = appendModelChannelGenerateCard({
+        channelNamePrefix: readModelChannelGenerateCardField(card, "channelNamePrefix"),
+        channelIdPrefix: readModelChannelGenerateCardField(card, "channelIdPrefix"),
+        baseUrl: readModelChannelGenerateCardField(card, "baseUrl"),
+        api: readModelChannelGenerateCardField(card, "api"),
+        modelIds: readModelChannelGenerateCardField(card, "modelIds"),
+        apiKeys: readModelChannelGenerateCardField(card, "apiKeys"),
+      });
+      duplicate?.querySelector('[data-field="channelNamePrefix"]')?.focus();
+      return;
+    }
+  });
+  elements.modelChannelGenerateCards?.addEventListener("input", () => {
     renumberModelChannelGenerateCards();
+  });
+  elements.importModelChannelBatchButton?.addEventListener("click", () => {
+    const raw = elements.modelChannelGenerateBatchTextarea?.value || "";
+    if (!raw.trim()) {
+      pushStatus("error", "导入失败", "请先填写兼容文本导入内容。");
+      return;
+    }
+    try {
+      const count = importBatchModelChannelGeneratorsAsCards(raw);
+      pushStatus("success", "已导入批量定义", `新增 ${count} 张卡片。`);
+    } catch (error) {
+      pushStatus("error", "导入失败", error.message);
+    }
+  });
+  elements.clearModelChannelCardsButton?.addEventListener("click", () => {
+    clearModelChannelGenerateCards({ keepOneBlank: true });
+    pushStatus("info", "已清空卡片", "保留一张空白卡片方便继续录入。");
   });
   elements.modelChannelsTextarea?.addEventListener("input", () => {
     state.modelChannelEditorDirty = true;

@@ -18,6 +18,9 @@ EOF
 INSTANCE_ACTION=""
 INSTANCE_SELECTOR=""
 INSTANCES_ROOT="$(shared_ops_default_instances_root)"
+# Pairing flows can race with restarts, so give the gateway more room than the
+# interactive CLI default.
+PAIRING_TIMEOUT_MS="${PAIRING_TIMEOUT_MS:-30000}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -129,9 +132,9 @@ run_instance_cli() {
 
 case "$INSTANCE_ACTION" in
   list)
-    run_instance_cli devices list --json
+    run_instance_cli devices list --timeout "$PAIRING_TIMEOUT_MS" --json
     ;;
   approve-latest)
-    run_instance_cli devices approve --latest --json
+    run_instance_cli devices approve --latest --timeout "$PAIRING_TIMEOUT_MS" --json
     ;;
 esac

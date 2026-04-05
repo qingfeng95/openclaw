@@ -185,11 +185,11 @@ export async function approveLatestSelectedInstancePairingSection(params) {
     return;
   }
   if (!isAdminModeEnabled()) {
-    pushStatus("error", "鎵瑰噯閰嶅澶辫触", "璇峰厛杩涘叆绠＄悊鍛樻ā寮忋€?");
+    pushStatus("error", "批准配对失败", "请先进入管理员模式。");
     return;
   }
   if (!canOpenInstanceUi(state.selectedItem)) {
-    pushStatus("error", "鎵瑰噯閰嶅澶辫触", "瀹炰緥灏氭湭杩愯锛屽厛鍚姩瀹炰緥鍐嶅鐞嗚澶囬厤瀵广€?");
+    pushStatus("error", "批准配对失败", "实例尚未运行，先启动实例再处理设备配对。");
     return;
   }
 

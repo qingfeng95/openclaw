@@ -10,20 +10,20 @@ export function renderPairingSummarySection(params) {
     return;
   }
   if (!state.selectedItem) {
-    elements.pairingSummary.innerHTML = `<p class="connection-note">閫夋嫨瀹炰緥鍚庡彲鏌ョ湅璁惧閰嶅鐘舵€併€?/p>`;
+    elements.pairingSummary.innerHTML = `<p class="connection-note">选择实例后可查看设备配对状态。</p>`;
     return;
   }
   if (!state.adminModeAvailable) {
-    elements.pairingSummary.innerHTML = `<p class="connection-note">褰撳墠鏈嶅姟鍣ㄦ湭鍚敤绠＄悊鍛樻ā寮忥紝鏃犳硶鏌ョ湅璁惧閰嶅銆?/p>`;
+    elements.pairingSummary.innerHTML = `<p class="connection-note">当前服务器未启用管理员模式，无法查看设备配对。</p>`;
     return;
   }
   if (!isAdminModeEnabled()) {
     elements.pairingSummary.innerHTML =
-      `<p class="connection-note">杩涘叆绠＄悊鍛樻ā寮忓悗锛屽彲鏌ョ湅寰呴厤瀵硅澶囧苟涓€閿壒鍑嗘渶鏂拌姹傘€?/p>`;
+      `<p class="connection-note">进入管理员模式后，可查看待配对设备并一键批准最新请求。</p>`;
     return;
   }
   if (state.pairingLoading) {
-    elements.pairingSummary.innerHTML = `<p class="connection-note">姝ｅ湪鍔犺浇璇ュ疄渚嬬殑璁惧閰嶅鐘舵€?..</p>`;
+    elements.pairingSummary.innerHTML = `<p class="connection-note">正在加载该实例的设备配对状态...</p>`;
     return;
   }
   if (state.pairingError) {
@@ -44,37 +44,37 @@ export function renderPairingSummarySection(params) {
       ? pending
           .slice(0, 5)
           .map((entry) => {
-            const name = entry.displayName || entry.deviceId || "鏈懡鍚嶈澶?";
+            const name = entry.displayName || entry.deviceId || "未命名设备";
             const requestId = entry.requestId || "unknown";
             const role = entry.role || (Array.isArray(entry.roles) ? entry.roles.join(", ") : "") || "unknown";
-            const scopes = Array.isArray(entry.scopes) && entry.scopes.length > 0 ? entry.scopes.join(", ") : "鏈０鏄?";
-            return `<article class="callout"><strong>${escapeHtml(name)}</strong><br />璇锋眰 ID锛?code>${escapeHtml(requestId)}</code><br />瑙掕壊锛?${escapeHtml(role)}<br />鑼冨洿锛?${escapeHtml(scopes)}</article>`;
+            const scopes = Array.isArray(entry.scopes) && entry.scopes.length > 0 ? entry.scopes.join(", ") : "未声明";
+            return `<article class="callout"><strong>${escapeHtml(name)}</strong><br />请求 ID：<code>${escapeHtml(requestId)}</code><br />角色：${escapeHtml(role)}<br />范围：${escapeHtml(scopes)}</article>`;
           })
           .join("")
-      : `<p class="connection-note">褰撳墠娌℃湁寰呮壒鍑嗙殑璁惧閰嶅璇锋眰銆?/p>`;
+      : `<p class="connection-note">当前没有待批准的设备配对请求。</p>`;
 
   const pairedMarkup =
     paired.length > 0
-      ? `<p class="connection-note">宸查厤瀵硅澶?${escapeHtml(paired.length)} 鍙般€?${
+      ? `<p class="connection-note">已配对设备 ${escapeHtml(paired.length)} 台。${
           paired[0]?.displayName || paired[0]?.deviceId
-            ? `鏈€杩戣澶囷細<code>${escapeHtml(paired[0].displayName || paired[0].deviceId)}</code>`
+            ? `最近设备：<code>${escapeHtml(paired[0].displayName || paired[0].deviceId)}</code>`
             : ""
         }</p>`
-      : `<p class="connection-note">褰撳墠杩樻病鏈夊凡閰嶅璁惧銆?/p>`;
+      : `<p class="connection-note">当前还没有已配对设备。</p>`;
 
   elements.pairingSummary.innerHTML = `
     <section class="detail-card" style="grid-column: 1 / -1;">
       <div class="detail-card-header">
-        <h3>閰嶅鎬昏</h3>
+        <h3>配对总览</h3>
         <div class="inline-actions">
-          <span class="chip ${pending.length > 0 ? "chip-danger" : "chip-success"}">寰呮壒鍑?${escapeHtml(pending.length)}</span>
-          <span class="chip ${paired.length > 0 ? "chip-success" : ""}">宸查厤瀵?${escapeHtml(paired.length)}</span>
+          <span class="chip ${pending.length > 0 ? "chip-danger" : "chip-success"}">待批准 ${escapeHtml(pending.length)}</span>
+          <span class="chip ${paired.length > 0 ? "chip-success" : ""}">已配对 ${escapeHtml(paired.length)}</span>
         </div>
       </div>
       ${
         latestPending
-          ? `<p class="connection-note">Latest request: <code>${escapeHtml(latestPending.requestId || "unknown")}</code> / ${escapeHtml(latestPending.displayName || latestPending.deviceId || "Unnamed device")}</p>`
-          : `<p class="connection-note">No new pending pairing requests.</p>`
+          ? `<p class="connection-note">最新请求：<code>${escapeHtml(latestPending.requestId || "unknown")}</code> / ${escapeHtml(latestPending.displayName || latestPending.deviceId || "未命名设备")}</p>`
+          : `<p class="connection-note">当前没有新的待处理配对请求。</p>`
       }
       ${pendingMarkup}
       ${pairedMarkup}

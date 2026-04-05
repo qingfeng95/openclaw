@@ -31,30 +31,30 @@ export function renderProbeGridSection(params) {
   }
   if (!item.probe) {
     elements.probeGrid.innerHTML =
-      '<div class="empty-state" style="min-height: 180px; grid-column: 1 / -1;">褰撳墠杩樻病鏈夋鏌ョ粨鏋溿€傚彲浠ュ厛鍒锋柊锛屾垨纭杩欎釜瀹炰緥宸茬粡鍚姩銆?/div>';
+      '<div class="empty-state" style="min-height: 180px; grid-column: 1 / -1;">当前还没有检查结果。可以先刷新，或确认这个实例已经启动。</div>';
     return;
   }
 
   const pills = [
     {
-      label: "瀛樻椿妫€鏌?",
-      value: item.probe.live == null ? "鏈繑鍥?" : item.probe.live ? "閫氳繃" : "鏈€氳繃",
+      label: "存活检查",
+      value: item.probe.live == null ? "未返回" : item.probe.live ? "通过" : "未通过",
       className: item.probe.live === true ? "probe-pill-success" : item.probe.live === false ? "probe-pill-danger" : "",
     },
     {
-      label: "灏辩华妫€鏌?",
-      value: item.probe.ready == null ? "鏈繑鍥?" : item.probe.ready ? "閫氳繃" : "鏈€氳繃",
+      label: "就绪检查",
+      value: item.probe.ready == null ? "未返回" : item.probe.ready ? "通过" : "未通过",
       className:
         item.probe.ready === true ? "probe-pill-success" : item.probe.ready === false ? "probe-pill-danger" : "",
     },
     {
-      label: "鏈€杩戞鏌ユ椂闂?",
+      label: "最近检查时间",
       value: formatDateTime(item.probe.checkedAt),
       className: "",
     },
     {
-      label: "閿欒璇存槑",
-      value: item.probe.error || "娌℃湁閿欒",
+      label: "错误说明",
+      value: item.probe.error || "没有错误",
       className: item.probe.error ? "probe-pill-warning" : "",
     },
   ];
@@ -115,38 +115,38 @@ export function renderUsageSummarySection(params) {
     : "";
   const cards = [
     buildUsageTable(
-      "杩欎釜瀹炰緥鏈€杩戠殑璇锋眰缁撴灉",
+      "这个实例最近的请求结果",
       topEntries(summary.countsByOutcome).map(([key, value]) => [explainOutcome(key), value]),
     ),
     buildUsageTable(
-      "杩欎釜瀹炰緥鏈€杩戞渶甯哥敤鐨勮兘鍔涚被鍒?",
+      "这个实例最近最常用的能力类别",
       topEntries(summary.countsByToolName).map(([key, value]) => [explainToolName(key), value]),
     ),
     buildUsageTable(
-      "杩欎釜瀹炰緥鏈€杩戞渶甯哥敤鐨勫叿浣撹兘鍔?",
+      "这个实例最近最常用的具体能力",
       topEntries(summary.countsByToolNameAction).map(([key, value]) => [explainToolAction(key), value]),
     ),
     buildUsageTable(
-      "杩欎釜瀹炰緥鐨勮姹備富瑕佸湪鍝噷瀹屾垚",
+      "这个实例的请求主要在哪里完成",
       topEntries(summary.countsByRouteType).map(([key, value]) => [explainRouteType(key), value]),
     ),
     buildUsageTable(
-      "杩欎釜瀹炰緥鏈€杩戞渶甯哥鍒扮殑鍏变韩闄愬埗",
+      "这个实例最近最常碰到的共享限制",
       topEntries(summary.countsByRuleId).map(([key, value]) => [explainRuleId(key), value]),
     ),
-    buildUsageTable("杩欎釜瀹炰緥鏈€杩戞渶甯歌鐨勫け璐ュ師鍥?", topEntries(summary.countsByDeniedReason)),
+    buildUsageTable("这个实例最近最常见的失败原因", topEntries(summary.countsByDeniedReason)),
   ];
 
   const totalCount = Number(summary.totalCount ?? 0);
   const filePath = summary.filePath
-    ? `<p class="connection-note">缁熻鏂囦欢锛?code>${escapeHtml(summary.filePath)}</code></p>`
+    ? `<p class="connection-note">统计文件：<code>${escapeHtml(summary.filePath)}</code></p>`
     : "";
 
   elements.usageSummary.innerHTML = `
     <section class="detail-card" style="grid-column: 1 / -1;">
       <div class="detail-card-header">
-        <h3>鏈€杩戣皟鐢ㄦ€昏</h3>
-        <span class="chip chip-success">璋冪敤璁板綍 ${escapeHtml(totalCount)}</span>
+        <h3>最近调用总览</h3>
+        <span class="chip chip-success">调用记录 ${escapeHtml(totalCount)}</span>
       </div>
       ${diagnosticsNote}
       ${usageNote}
@@ -157,7 +157,7 @@ export function renderUsageSummarySection(params) {
 }
 
 export function renderDetailEmptyStateSection({ elements, renderPairingSummary, updateAdminModeUi }) {
-  elements.detailBadge.textContent = "閺堫亪鈧瀚ㄧ€圭偘绶?";
+  elements.detailBadge.textContent = "未选择实例";
   elements.detailEmpty.classList.remove("hidden");
   elements.detailContent.classList.add("hidden");
   if (elements.openUiButton) {
@@ -192,15 +192,15 @@ export function renderDetailActionStateSection(params) {
     elements.openUiButton.disabled = !canOpenInstanceUi(item);
     elements.openUiButton.title =
       instanceRuntimeLocation(item) === "container"
-        ? "闁俺绻?Shared Console 娴狅絿鎮婇幍鎾崇磻鐎圭懓娅掗崘鍛杽娓?UI"
-        : "闁俺绻?Shared Console 娴狅絿鎮婇幍鎾崇磻鐎圭偘绶?UI";
+        ? "通过 Shared Console 代理打开该容器实例的 UI"
+        : "通过 Shared Console 打开该实例的 UI";
   }
   if (elements.copyUiLinkButton) {
     elements.copyUiLinkButton.disabled = !canOpenInstanceUi(item);
     elements.copyUiLinkButton.title =
       instanceRuntimeLocation(item) === "container"
-        ? "婢跺秴鍩楃拠銉ョ杽娓氬绮?Shared Console 娴狅絿鎮婇惃?UI 閸︽澘娼?"
-        : "婢跺秴鍩楃拠銉ョ杽娓氬绮?Shared Console 娴狅絿鎮婇惃?UI 閸︽澘娼?";
+        ? "复制通过 Shared Console 代理访问该容器实例 UI 的链接"
+        : "复制通过 Shared Console 访问该实例 UI 的链接";
   }
   if (elements.copyTokenButton) {
     elements.copyTokenButton.disabled = !isAdminModeEnabled();

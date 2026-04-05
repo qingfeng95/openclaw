@@ -57,6 +57,9 @@ import {
 import { renderPairingSummarySection } from "./pairing-render.js";
 import {
   buildFallbackContainerMetaSection,
+  buildOverviewHotspotSectionsSection,
+  buildOverviewSummaryCardsSection,
+  buildOverviewUsageNoteSection,
   buildWatchNoteSection,
   canOpenInstanceUiSection,
   defaultModelChannelSettingsSection,
@@ -111,6 +114,12 @@ const state = {
   instances: [],
   containers: [],
   containersMeta: null,
+  overviewUsageLoading: false,
+  overviewUsageSummary: null,
+  overviewUsageCheckedAt: null,
+  overviewUsageError: "",
+  overviewUsageInstanceCount: 0,
+  overviewUsageReportedInstanceCount: 0,
   selectedContainerName: null,
   containerLogsText: "",
   containerLogsTail: 160,
@@ -416,18 +425,20 @@ function instanceScopeLabel(scope) {
   return instanceScopeLabelSection(scope);
 }
 
-function aggregateCounts(instances, key) {
+function aggregateCounts(usageSummary, key) {
   const totals = {};
-  for (const item of instances) {
-    const record = item?.probe?.usageSummary?.[key];
-    if (!record || typeof record !== "object") {
-      continue;
-    }
-    for (const [entryKey, entryValue] of Object.entries(record)) {
-      totals[entryKey] = Number(totals[entryKey] ?? 0) + Number(entryValue ?? 0);
-    }
+  const record = usageSummary?.[key];
+  if (!record || typeof record !== "object") {
+    return totals;
+  }
+  for (const [entryKey, entryValue] of Object.entries(record)) {
+    totals[entryKey] = Number(entryValue ?? 0);
   }
   return totals;
+}
+
+function buildOverviewUsageNote() {
+  return buildOverviewUsageNoteSection(state, { formatDateTime });
 }
 
 function explainOutcome(key) {
@@ -626,63 +637,11 @@ function pushStatus(kind, title, detail = "", tab = state.activeTab) {
 }
 
 function renderSummary() {
-  const running = state.instances.filter((item) => item.process?.state === "running").length;
-  const healthy = state.instances.filter((item) => item.probe?.live && item.probe?.ready).length;
-  const stale = state.instances.filter((item) => item.process?.state === "running" && item.probe?.checkedAt == null)
-    .length;
-  const hostRuntimeCount = state.instances.filter((item) => instanceRuntimeLocation(item) === "host").length;
-  const containerRuntimeCount = state.instances.filter(
-    (item) => instanceRuntimeLocation(item) === "container",
-  ).length;
-  const versions = new Set(
-    state.instances.map((item) => item.probe?.version).filter((value) => typeof value === "string" && value),
-  );
-  const totalUsage = state.instances.reduce(
-    (sum, item) => sum + Number(item.probe?.usageSummary?.totalCount ?? 0),
-    0,
-  );
-
-  const cards = [
-    { label: "共享实例总数", value: state.instances.length, subtext: `${running} 个正在运行` },
-    {
-      label: "单独实例总数",
-      value: state.dedicatedInstances.length,
-      subtext: state.dedicatedInstances.length > 0 ? "这类实例更适合承接独占能力" : "当前还没有单独实例",
-    },
-    {
-      label: "当前健康可用",
-      value: healthy,
-      subtext: `${Math.max(state.instances.length - healthy, 0)} 个需要人工关注`,
-    },
-    {
-      label: "当前版本情况",
-      value: versions.size,
-      subtext: versions.size > 0 ? Array.from(versions).slice(0, 2).join(" / ") : "暂时还没拿到版本信息",
-    },
-    {
-      label: "最近调用次数",
-      value: totalUsage,
-      subtext: state.lastLoadedAt ? `最近刷新：${formatDateTime(state.lastLoadedAt)}` : "来自已采集的调用汇总",
-    },
-    {
-      label: "待人工复核",
-      value: stale,
-      subtext: stale > 0 ? "这些实例正在运行，但还没有最近一次检查结果" : "所有运行中的实例都拿到了检查结果",
-    },
-    {
-      label: "容器中的实例",
-      value: containerRuntimeCount,
-      subtext:
-        containerRuntimeCount > 0
-          ? `${state.containersMeta?.linkedContainerCount ?? 0} 个容器已纳管`
-          : "当前共享实例还没有放进容器",
-    },
-    {
-      label: "宿主机运行实例",
-      value: hostRuntimeCount,
-      subtext: hostRuntimeCount > 0 ? "这些实例当前直接跑在宿主机" : "当前没有宿主机运行的实例",
-    },
-  ];
+  const cards = buildOverviewSummaryCardsSection(state, {
+    instanceRuntimeLocation,
+    formatMaybe,
+    formatDateTime,
+  });
 
   elements.summaryGrid.innerHTML = cards
     .map(
@@ -746,44 +705,9 @@ function topEntries(record, limit = 6) {
 }
 
 function renderHotspots() {
-  const hotRules = topEntries(aggregateCounts(state.instances, "countsByRuleId"), 5);
-  const hotDeniedReasons = topEntries(aggregateCounts(state.instances, "countsByDeniedReason"), 5);
-  const hotOutcomes = topEntries(aggregateCounts(state.instances, "countsByOutcome"), 5);
-  const hotToolActions = topEntries(aggregateCounts(state.instances, "countsByToolNameAction"), 6);
-  const hotRouteTypes = topEntries(aggregateCounts(state.instances, "countsByRouteType"), 6);
-
-  const sections = [
-    {
-      title: "最近最常因为什么被挡住",
-      kind: "rule",
-      rows: hotRules,
-      empty: "目前调用记录还不够，暂时看不出大家最常因为什么限制被挡住。",
-    },
-    {
-      title: "最近最常见的失败原因",
-      kind: "denied",
-      rows: hotDeniedReasons,
-      empty: "目前调用记录还不够，暂时看不出最近最常见的失败原因。",
-    },
-    {
-      title: "最近请求最后是怎么处理完的",
-      kind: "outcome",
-      rows: hotOutcomes,
-      empty: "目前调用记录还不够，暂时看不出最近更多是成功完成、被拦截还是暂不支持。",
-    },
-    {
-      title: "最近大家最常调用什么能力",
-      kind: "toolAction",
-      rows: hotToolActions,
-      empty: "目前调用记录还不够，暂时看不出大家最近最常在共享实例上调用什么能力。",
-    },
-    {
-      title: "请求主要落在哪里处理",
-      kind: "routeType",
-      rows: hotRouteTypes,
-      empty: "目前调用记录还不够，暂时看不出请求更多是在实例本地完成，还是转给共享执行通道。",
-    },
-  ];
+  const sections = buildOverviewHotspotSectionsSection(state.overviewUsageSummary, {
+    topEntries,
+  });
 
   const intro = `
     <article class="hotspot-card">
@@ -1386,6 +1310,28 @@ async function loadInstanceUsageSummary(scope, id, requestToken = state.detailRe
   });
 }
 
+async function loadOverviewUsageSummary() {
+  state.overviewUsageLoading = true;
+  state.overviewUsageError = "";
+  try {
+    const payload = await fetchJson("/api/instances/usage-summary");
+    state.overviewUsageSummary = payload?.item?.usageSummary ?? null;
+    state.overviewUsageCheckedAt = payload?.item?.checkedAt ?? null;
+    state.overviewUsageInstanceCount = Number(payload?.item?.instanceCount ?? state.sharedInstances.length ?? 0);
+    state.overviewUsageReportedInstanceCount = Number(
+      payload?.item?.reportedInstanceCount ?? (state.overviewUsageSummary ? state.sharedInstances.length : 0),
+    );
+  } catch (error) {
+    state.overviewUsageSummary = null;
+    state.overviewUsageCheckedAt = null;
+    state.overviewUsageError = error.message;
+    state.overviewUsageInstanceCount = state.sharedInstances.length;
+    state.overviewUsageReportedInstanceCount = 0;
+  } finally {
+    state.overviewUsageLoading = false;
+  }
+}
+
 async function loadInstances({ preserveSelection = true } = {}) {
   return loadInstancesSection({
     state,
@@ -1397,6 +1343,7 @@ async function loadInstances({ preserveSelection = true } = {}) {
     ensureModelChannelCatalogShape,
     normalizeModelChannelSettingsForEditor,
     loadInstanceDetail,
+    loadOverviewUsageSummary,
     configurePairingAutoRefresh,
     updateConnectionNote,
     formatDateTime,

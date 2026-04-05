@@ -32,6 +32,13 @@ export type SharedInstanceUsageSummaryResult = {
   error?: string;
 };
 
+export type SharedInstancesUsageSummaryAggregateResult = {
+  checkedAt: string;
+  usageSummary: SharedUsageSummaryPayload | null;
+  instanceCount: number;
+  reportedInstanceCount: number;
+};
+
 export type SharedInstanceRecord = {
   id: string;
   name: string;
@@ -331,6 +338,61 @@ function getUsageSummaryCacheKey(instance: SharedInstanceRecord): string {
   return `${instance.paths.dir}::usage-summary`;
 }
 
+function mergeUsageSummaryCounts(
+  target: Record<string, number>,
+  source: unknown,
+): void {
+  if (!isObject(source)) {
+    return;
+  }
+  for (const [key, value] of Object.entries(source)) {
+    target[key] = Number(target[key] ?? 0) + Number(value ?? 0);
+  }
+}
+
+function buildUsageSummaryAggregatePayload(
+  results: SharedInstanceUsageSummaryResult[],
+): SharedUsageSummaryPayload | null {
+  const countsByOutcome: Record<string, number> = {};
+  const countsByToolName: Record<string, number> = {};
+  const countsByToolNameAction: Record<string, number> = {};
+  const countsByRouteType: Record<string, number> = {};
+  const countsByRuleId: Record<string, number> = {};
+  const countsByDeniedReason: Record<string, number> = {};
+
+  let totalCount = 0;
+  let hasUsageSummary = false;
+
+  for (const result of results) {
+    const summary = result.usageSummary;
+    if (!isObject(summary)) {
+      continue;
+    }
+    hasUsageSummary = true;
+    totalCount += Number(summary.totalCount ?? 0);
+    mergeUsageSummaryCounts(countsByOutcome, summary.countsByOutcome);
+    mergeUsageSummaryCounts(countsByToolName, summary.countsByToolName);
+    mergeUsageSummaryCounts(countsByToolNameAction, summary.countsByToolNameAction);
+    mergeUsageSummaryCounts(countsByRouteType, summary.countsByRouteType);
+    mergeUsageSummaryCounts(countsByRuleId, summary.countsByRuleId);
+    mergeUsageSummaryCounts(countsByDeniedReason, summary.countsByDeniedReason);
+  }
+
+  if (!hasUsageSummary) {
+    return null;
+  }
+
+  return {
+    totalCount,
+    countsByOutcome,
+    countsByToolName,
+    countsByToolNameAction,
+    countsByRouteType,
+    countsByRuleId,
+    countsByDeniedReason,
+  };
+}
+
 export async function readSharedInstanceUsageSummary(
   instance: SharedInstanceRecord,
   options: BuildSharedInstanceUsageSummaryOptions = {},
@@ -361,6 +423,19 @@ export async function readSharedInstanceUsageSummary(
   }
 
   return result;
+}
+
+export async function readSharedInstancesUsageSummaryAggregate(
+  instances: SharedInstanceRecord[],
+  options: BuildSharedInstanceUsageSummaryOptions = {},
+): Promise<SharedInstancesUsageSummaryAggregateResult> {
+  const results = await Promise.all(instances.map((item) => readSharedInstanceUsageSummary(item, options)));
+  return {
+    checkedAt: new Date().toISOString(),
+    usageSummary: buildUsageSummaryAggregatePayload(results),
+    instanceCount: instances.length,
+    reportedInstanceCount: results.filter((result) => isObject(result.usageSummary)).length,
+  };
 }
 
 export async function readSharedInstanceDiagnostics(

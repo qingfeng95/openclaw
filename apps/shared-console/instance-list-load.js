@@ -48,6 +48,7 @@ export async function loadInstancesSection(params) {
     ensureModelChannelCatalogShape,
     normalizeModelChannelSettingsForEditor,
     loadInstanceDetail,
+    loadOverviewUsageSummary,
     configurePairingAutoRefresh,
     updateConnectionNote,
     formatDateTime,
@@ -91,6 +92,7 @@ export async function loadInstancesSection(params) {
     );
 
     state.lastLoadedAt = new Date().toISOString();
+    await loadOverviewUsageSummary();
     restoreSelectedInstance(state, preserveSelection);
 
     if (state.selectedId) {

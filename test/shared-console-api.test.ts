@@ -438,6 +438,120 @@ describe("shared console api", () => {
     });
   });
 
+
+  it("aggregates collection usage summaries without colliding with item routes", async () => {
+    await withTempInstancesRoot(async (root) => {
+      await writeInstance(root, {
+        id: "usage-summary",
+        name: "Aggregate Shadow",
+        port: 19110,
+        runtimeKind: "container",
+        containerName: "crewclaw-shadow",
+        containerId: "cid-shadow",
+      });
+      await writeInstance(root, {
+        id: "alpha",
+        name: "Alpha",
+        port: 19111,
+        runtimeKind: "container",
+        containerName: "crewclaw-alpha",
+        containerId: "cid-alpha",
+      });
+      await writeInstance(root, {
+        id: "stopped",
+        name: "Stopped",
+        port: 19112,
+      });
+      await fs.writeFile(path.join(root, "usage-summary", "run", "gateway.pid"), "4242\n", "utf8");
+      await fs.writeFile(path.join(root, "alpha", "run", "gateway.pid"), "4343\n", "utf8");
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        runDockerCommand: async (invocation) => {
+          const selector = invocation.args[1] ?? "";
+          const url = invocation.args.at(-2) ?? "";
+          if (!url.endsWith("/shared/usage/summary")) {
+            return { exitCode: 1, stdout: "", stderr: `unexpected url: ${url}` };
+          }
+          if (selector === "crewclaw-shadow") {
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({
+                totalCount: 4,
+                countsByOutcome: { tool_denied: 1, tool_local_executed: 3 },
+                countsByToolName: { browser: 4 },
+                countsByToolNameAction: { "browser.open": 4 },
+                countsByRouteType: { local: 3, worker: 1 },
+                countsByRuleId: { "shared.browser.worker.v1": 1 },
+                countsByDeniedReason: { policy: 1 },
+              }),
+              stderr: "",
+            };
+          }
+          if (selector === "crewclaw-alpha") {
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({
+                totalCount: 6,
+                countsByOutcome: { tool_routed_executed: 6 },
+                countsByToolName: { nodes: 6 },
+                countsByToolNameAction: { "nodes.run": 6 },
+                countsByRouteType: { worker: 6 },
+                countsByRuleId: { "default.local.v1": 6 },
+                countsByDeniedReason: {},
+              }),
+              stderr: "",
+            };
+          }
+          return { exitCode: 1, stdout: "", stderr: `unexpected selector: ${selector}` };
+        },
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/instances/usage-summary`);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({
+          ok: true,
+          item: {
+            pool: "shared",
+            usageSummary: {
+              totalCount: 10,
+              countsByOutcome: {
+                tool_denied: 1,
+                tool_local_executed: 3,
+                tool_routed_executed: 6,
+              },
+              countsByToolName: {
+                browser: 4,
+                nodes: 6,
+              },
+              countsByToolNameAction: {
+                "browser.open": 4,
+                "nodes.run": 6,
+              },
+              countsByRouteType: {
+                local: 3,
+                worker: 7,
+              },
+              countsByRuleId: {
+                "shared.browser.worker.v1": 1,
+                "default.local.v1": 6,
+              },
+              countsByDeniedReason: {
+                policy: 1,
+              },
+            },
+            instanceCount: 3,
+            reportedInstanceCount: 2,
+            checkedAt: expect.any(String),
+          },
+        });
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
   it("keeps diagnostics and usage-summary caches isolated", async () => {
     await withTempInstancesRoot(async (root) => {
       await writeInstance(root, {

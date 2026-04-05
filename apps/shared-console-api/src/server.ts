@@ -22,6 +22,7 @@ import {
   getSharedInstanceById,
   listSharedInstances,
   readSharedInstanceDiagnostics,
+  readSharedInstancesUsageSummaryAggregate,
   readSharedInstanceUsageSummary,
   resolveSharedConsoleApiBashPath,
   resolveSharedConsoleDedicatedInstancesRoot,
@@ -488,6 +489,52 @@ function parseInstanceDiagnosticsRoute(url: URL) {
   );
 }
 
+function parseNamedCollectionUsageSummaryRoute(
+  url: URL,
+  basePath: string,
+  pool: InstancePool,
+): { pool: InstancePool } | null {
+  if (url.pathname !== `${basePath}/usage-summary`) {
+    return null;
+  }
+  return { pool };
+}
+
+function parseCollectionUsageSummaryRoute(url: URL) {
+  return (
+    parseNamedCollectionUsageSummaryRoute(url, "/api/instances", "shared") ??
+    parseNamedCollectionUsageSummaryRoute(url, "/api/shared-instances", "shared") ??
+    parseNamedCollectionUsageSummaryRoute(url, "/api/dedicated-instances", "dedicated")
+  );
+}
+
+async function handleCollectionUsageSummaryRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+  route: { pool: InstancePool },
+): Promise<void> {
+  if ((req.method ?? "GET").toUpperCase() !== "GET") {
+    throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
+  }
+  const items = await listSharedInstances(
+    resolveInstancesRoot(config, route.pool),
+    resolveRecordOptions(config, deps, false),
+  );
+  const result = await readSharedInstancesUsageSummaryAggregate(items, resolveUsageSummaryOptions(config, deps));
+  sendJson(res, 200, {
+    ok: true,
+    item: {
+      pool: route.pool,
+      usageSummary: result.usageSummary,
+      checkedAt: result.checkedAt,
+      instanceCount: result.instanceCount,
+      reportedInstanceCount: result.reportedInstanceCount,
+    },
+  });
+}
+
 function parseNamedInstanceUsageSummaryRoute(
   url: URL,
   basePath: string,
@@ -533,6 +580,7 @@ function parseContainerRoute(url: URL):
   }
   return null;
 }
+
 
 function readTailQuery(url: URL, defaultValue = 160): number {
   const value = url.searchParams.get("tail")?.trim();
@@ -1584,6 +1632,12 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
         const instanceDiagnosticsRoute = parseInstanceDiagnosticsRoute(url);
         if (instanceDiagnosticsRoute) {
           await handleInstanceDiagnosticsRequest(req, res, config, deps, instanceDiagnosticsRoute);
+          return;
+        }
+
+        const collectionUsageSummaryRoute = parseCollectionUsageSummaryRoute(url);
+        if (collectionUsageSummaryRoute) {
+          await handleCollectionUsageSummaryRequest(req, res, config, deps, collectionUsageSummaryRoute);
           return;
         }
 

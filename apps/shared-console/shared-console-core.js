@@ -79,6 +79,137 @@ export function buildFallbackContainerMetaSection(instances, error = null) {
   };
 }
 
+function aggregateUsageCounts(record, key) {
+  const totals = {};
+  const source = record?.[key];
+  if (!source || typeof source !== "object") {
+    return totals;
+  }
+  for (const [entryKey, entryValue] of Object.entries(source)) {
+    totals[entryKey] = Number(entryValue ?? 0);
+  }
+  return totals;
+}
+
+export function buildOverviewUsageNoteSection(state, { formatDateTime }) {
+  if (state.overviewUsageLoading) {
+    return "调用汇总正在更新";
+  }
+  if (state.overviewUsageError) {
+    return `调用汇总暂时不可用：${state.overviewUsageError}`;
+  }
+  if (state.overviewUsageCheckedAt) {
+    const coverage =
+      state.overviewUsageInstanceCount > 0
+        ? `已汇总 ${state.overviewUsageReportedInstanceCount}/${state.overviewUsageInstanceCount} 个共享实例`
+        : "共享实例调用汇总已刷新";
+    return `${coverage}；更新时间 ${formatDateTime(state.overviewUsageCheckedAt)}`;
+  }
+  return "来自已采集的调用汇总";
+}
+
+export function buildOverviewSummaryCardsSection(
+  state,
+  { instanceRuntimeLocation, formatMaybe, formatDateTime },
+) {
+  const running = state.instances.filter((item) => item.process?.state === "running").length;
+  const healthy = state.instances.filter((item) => item.probe?.live && item.probe?.ready).length;
+  const stale = state.instances.filter((item) => item.process?.state === "running" && item.probe?.checkedAt == null)
+    .length;
+  const hostRuntimeCount = state.instances.filter((item) => instanceRuntimeLocation(item) === "host").length;
+  const containerRuntimeCount = state.instances.filter((item) => instanceRuntimeLocation(item) === "container").length;
+  const versions = new Set(
+    state.instances.map((item) => item.probe?.version).filter((value) => typeof value === "string" && value),
+  );
+  const totalUsage = Number(state.overviewUsageSummary?.totalCount ?? 0);
+
+  return [
+    { label: "共享实例总数", value: state.instances.length, subtext: `${running} 个正在运行` },
+    {
+      label: "单独实例总数",
+      value: state.dedicatedInstances.length,
+      subtext: state.dedicatedInstances.length > 0 ? "这类实例更适合承接独占能力" : "当前还没有单独实例",
+    },
+    {
+      label: "当前健康可用",
+      value: healthy,
+      subtext: `${Math.max(state.instances.length - healthy, 0)} 个需要人工关注`,
+    },
+    {
+      label: "当前版本情况",
+      value: versions.size,
+      subtext: versions.size > 0 ? Array.from(versions).slice(0, 2).join(" / ") : "暂时还没拿到版本信息",
+    },
+    {
+      label: "最近调用次数",
+      value: totalUsage,
+      subtext: buildOverviewUsageNoteSection(state, { formatDateTime }),
+    },
+    {
+      label: "待人工复核",
+      value: stale,
+      subtext: stale > 0 ? "这些实例正在运行，但还没有最近一次检查结果" : "所有运行中的实例都拿到了检查结果",
+    },
+    {
+      label: "容器中的实例",
+      value: containerRuntimeCount,
+      subtext:
+        containerRuntimeCount > 0
+          ? `${state.containersMeta?.linkedContainerCount ?? 0} 个容器已纳管`
+          : "当前共享实例还没有放进容器",
+    },
+    {
+      label: "宿主机运行实例",
+      value: hostRuntimeCount,
+      subtext: hostRuntimeCount > 0 ? "这些实例当前直接跑在宿主机" : "当前没有宿主机运行的实例",
+    },
+  ].map((card) => ({
+    ...card,
+    subtext: formatMaybe(card.subtext),
+  }));
+}
+
+export function buildOverviewHotspotSectionsSection(overviewUsageSummary, { topEntries }) {
+  const hotRules = topEntries(aggregateUsageCounts(overviewUsageSummary, "countsByRuleId"), 5);
+  const hotDeniedReasons = topEntries(aggregateUsageCounts(overviewUsageSummary, "countsByDeniedReason"), 5);
+  const hotOutcomes = topEntries(aggregateUsageCounts(overviewUsageSummary, "countsByOutcome"), 5);
+  const hotToolActions = topEntries(aggregateUsageCounts(overviewUsageSummary, "countsByToolNameAction"), 6);
+  const hotRouteTypes = topEntries(aggregateUsageCounts(overviewUsageSummary, "countsByRouteType"), 6);
+
+  return [
+    {
+      title: "最近最常因为什么被挡住",
+      kind: "rule",
+      rows: hotRules,
+      empty: "目前调用记录还不够，暂时看不出大家最常因为什么限制被挡住。",
+    },
+    {
+      title: "最近最常见的失败原因",
+      kind: "denied",
+      rows: hotDeniedReasons,
+      empty: "目前调用记录还不够，暂时看不出最近最常见的失败原因。",
+    },
+    {
+      title: "最近请求最后是怎么处理完的",
+      kind: "outcome",
+      rows: hotOutcomes,
+      empty: "目前调用记录还不够，暂时看不出最近更多是成功完成、被拦截还是暂不支持。",
+    },
+    {
+      title: "最近大家最常调用什么能力",
+      kind: "toolAction",
+      rows: hotToolActions,
+      empty: "目前调用记录还不够，暂时看不出大家最近最常在共享实例上调用什么能力。",
+    },
+    {
+      title: "请求主要落在哪里处理",
+      kind: "routeType",
+      rows: hotRouteTypes,
+      empty: "目前调用记录还不够，暂时看不出请求更多是在实例本地完成，还是转给共享执行通道。",
+    },
+  ];
+}
+
 export function describeContainerActionSection(action) {
   switch (action) {
     case "start":

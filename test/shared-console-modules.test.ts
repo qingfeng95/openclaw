@@ -27,6 +27,9 @@ import {
 import { loadInstanceUsageSummarySection } from "../apps/shared-console/instance-requests.js";
 import { buildDiagnosticsNoteSection, renderUsageSummarySection } from "../apps/shared-console/detail-render.js";
 import {
+  buildOverviewHotspotSectionsSection,
+  buildOverviewSummaryCardsSection,
+  buildOverviewUsageNoteSection,
   buildFallbackContainerMetaSection,
   buildWatchNoteSection,
   canOpenInstanceUiSection,
@@ -325,19 +328,104 @@ describe("shared console core helpers", () => {
     ).toBe("就绪检查没有通过，实例可能暂时不能接单。");
   });
 
-  it("explains shared usage labels and aggregates top entries", () => {
-    expect(explainOutcomeSection("tool_denied")).toBe("被共享限制拦截");
-    expect(explainRouteTypeSection("worker")).toBe("共享执行通道");
-    expect(explainRuleIdSection("x.local-path-boundary.y")).toBe("本地文件来源超出允许范围");
-    expect(explainToolNameSection("browser")).toBe("浏览器能力");
-    expect(explainToolActionSection("browser.open")).toBe("浏览器能力 / browser.open");
-    expect(explainHotspotValueSection("toolAction", "browser.open")).toBe("浏览器能力 / browser.open");
-    expect(statusKindLabelSection("error")).toBe("失败");
-    expect(topEntriesSection({ a: 1, c: 3, b: 2 }, 2)).toEqual([
-      ["c", 3],
-      ["b", 2],
-    ]);
+
+  it("builds overview summary cards from aggregate usage state", () => {
+    const cards = buildOverviewSummaryCardsSection(
+      {
+        instances: [
+          {
+            process: { state: "running" },
+            runtime: { location: "container" },
+            probe: { live: true, ready: true, checkedAt: "2026-04-05T00:00:00.000Z", version: "2026.4.5" },
+          },
+          {
+            process: { state: "running" },
+            runtime: { location: "host" },
+            probe: { live: false, ready: false, checkedAt: null, version: "2026.4.4" },
+          },
+        ],
+        dedicatedInstances: [{ id: "dedicated-1" }],
+        containersMeta: { linkedContainerCount: 1 },
+        overviewUsageLoading: false,
+        overviewUsageSummary: { totalCount: 42 },
+        overviewUsageCheckedAt: "2026-04-05T00:10:00.000Z",
+        overviewUsageError: "",
+        overviewUsageInstanceCount: 2,
+        overviewUsageReportedInstanceCount: 1,
+      },
+      {
+        instanceRuntimeLocation: instanceRuntimeLocationSection,
+        formatMaybe: formatMaybeSection,
+        formatDateTime: () => "2026-04-05 00:10",
+      },
+    );
+
+    expect(cards.find((card) => card.label === "最近调用次数")).toEqual({
+      label: "最近调用次数",
+      value: 42,
+      subtext: "已汇总 1/2 个共享实例；更新时间 2026-04-05 00:10",
+    });
   });
+
+  it("builds overview usage note for loading, error, and coverage states", () => {
+    expect(
+      buildOverviewUsageNoteSection(
+        {
+          overviewUsageLoading: true,
+          overviewUsageError: "",
+          overviewUsageCheckedAt: null,
+          overviewUsageInstanceCount: 0,
+          overviewUsageReportedInstanceCount: 0,
+        },
+        { formatDateTime: () => "unused" },
+      ),
+    ).toBe("调用汇总正在更新");
+
+    expect(
+      buildOverviewUsageNoteSection(
+        {
+          overviewUsageLoading: false,
+          overviewUsageError: "network down",
+          overviewUsageCheckedAt: null,
+          overviewUsageInstanceCount: 2,
+          overviewUsageReportedInstanceCount: 0,
+        },
+        { formatDateTime: () => "unused" },
+      ),
+    ).toBe("调用汇总暂时不可用：network down");
+
+    expect(
+      buildOverviewUsageNoteSection(
+        {
+          overviewUsageLoading: false,
+          overviewUsageError: "",
+          overviewUsageCheckedAt: "2026-04-05T00:10:00.000Z",
+          overviewUsageInstanceCount: 3,
+          overviewUsageReportedInstanceCount: 2,
+        },
+        { formatDateTime: () => "2026-04-05 00:10" },
+      ),
+    ).toBe("已汇总 2/3 个共享实例；更新时间 2026-04-05 00:10");
+  });
+
+  it("builds hotspots only from overview aggregate usage state", () => {
+    const sections = buildOverviewHotspotSectionsSection(
+      {
+        countsByRuleId: { "shared.browser.worker.v1": 4 },
+        countsByDeniedReason: { denied: 2 },
+        countsByOutcome: { tool_denied: 2 },
+        countsByToolNameAction: { "browser.open": 5 },
+        countsByRouteType: { worker: 5 },
+      },
+      {
+        topEntries: topEntriesSection,
+      },
+    );
+
+    expect(sections.find((section) => section.kind === "toolAction")?.rows).toEqual([["browser.open", 5]]);
+    expect(sections.find((section) => section.kind === "rule")?.rows).toEqual([["shared.browser.worker.v1", 4]]);
+  });
+
 });
 
 describe("shared console utility helpers", () => {

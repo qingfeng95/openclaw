@@ -1,9 +1,105 @@
+import {
+  applySelectedInstanceCore,
+  applySelectedInstanceDiagnostics,
+  applySelectedInstanceUsageSummary,
+  buildDiagnosticsFailureProbe,
+  buildUsageSummaryFailureResult,
+  isCurrentDetailRequest,
+  refreshSelectedInstanceAsync,
+} from "./instance-detail.js";
+import {
+  approveLatestSelectedInstancePairingSection,
+  loadInstanceDetailSection,
+  loadInstanceDiagnosticsSection,
+  loadInstanceUsageSummarySection,
+  loadSelectedInstancePairingSection,
+} from "./instance-requests.js";
+import { loadInstancesSection } from "./instance-list-load.js";
+import {
+  appendModelChannelGenerateCardSection,
+  buildModelChannelGenerateCardDefaultValuesSection,
+  buildModelChannelGeneratorSharedOptionsSection,
+  buildSingleModelChannelGeneratorPayloadSection,
+  clearModelChannelGenerateCardsSection,
+  collectBatchCardModelChannelGeneratorsSection,
+  ensureModelChannelGenerateCardsInitializedSection,
+  getModelChannelGenerateCardsSection,
+  importBatchModelChannelGeneratorsAsCardsSection,
+  parseBatchModelChannelGeneratorsSection,
+  readModelChannelGenerateCardFieldSection,
+  renumberModelChannelGenerateCardsSection,
+  setModelChannelGenerateCardsDisabledSection,
+  splitModelChannelGeneratorListSection,
+} from "./model-channel-generator.js";
+import {
+  bindModelChannelEventsSection,
+  handleDetailModelChannelSubmitSection,
+  handleModelChannelGenerateSubmitSection,
+  handleModelChannelsSubmitSection,
+  loadModelChannelConfigSection,
+  renderModelChannelsPanelSection,
+  updateSelectedInstanceModelChannelSection,
+} from "./model-channel-panel.js";
+import {
+  clearAdminModeSection,
+  enableAdminModeSection,
+  renderDetailSection,
+  renderMetaGridSection,
+} from "./detail-panel.js";
+import {
+  buildDiagnosticsNoteSection,
+  renderDetailActionStateSection,
+  renderDetailContentSectionsSection,
+  renderDetailEmptyStateSection,
+  renderProbeGridSection,
+  renderUsageSummarySection,
+} from "./detail-render.js";
+import { renderPairingSummarySection } from "./pairing-render.js";
+import {
+  buildFallbackContainerMetaSection,
+  buildWatchNoteSection,
+  canOpenInstanceUiSection,
+  defaultModelChannelSettingsSection,
+  describeContainerActionSection,
+  describeInstanceActionSection,
+  explainHotspotValueSection,
+  explainOutcomeSection,
+  explainRouteTypeSection,
+  explainRuleIdSection,
+  explainToolActionSection,
+  explainToolNameSection,
+  ensureModelChannelCatalogShapeSection,
+  instanceApiBaseSection,
+  instanceRuntimeChipLabelSection,
+  instanceRuntimeDescriptionSection,
+  instanceRuntimeLocationSection,
+  instanceScopeLabelSection,
+  normalizeBindModeInputSection,
+  normalizeModelChannelSettingsForEditorSection,
+  statusKindLabelSection,
+  topEntriesSection,
+} from "./shared-console-core.js";
+import {
+  buildUiUrlWithOperatorScopesSection,
+  escapeHtmlSection,
+  formatDateTimeSection,
+  formatMaybeSection,
+  formatRelativeTimeSection,
+  isAbsoluteHttpUrlSection,
+  joinApiUrlSection,
+  normalizeApiBaseSection,
+  normalizeApiPathSection,
+  resolveInstanceUiUrlSection,
+  resolveUserInstanceUiScopesSection,
+} from "./shared-console-utils.js";
+
 const DEFAULT_API_PORT = "43100";
 const API_BASE_STORAGE_KEY = "crewclaw.sharedConsole.apiBase";
 const AUTO_REFRESH_STORAGE_KEY = "crewclaw.sharedConsole.autoRefresh";
 const ADMIN_TOKEN_STORAGE_KEY = "crewclaw.sharedConsole.adminToken";
 const TAB_STORAGE_KEY = "crewclaw.sharedConsole.activeTab";
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
+const PAIRING_REFRESH_INTERVAL_MS = 5_000;
 const STATUS_LIMIT = 14;
 
 const state = {
@@ -21,6 +117,11 @@ const state = {
   selectedScope: "shared",
   selectedId: null,
   selectedItem: null,
+  selectedDiagnosticsLoading: false,
+  selectedUsageLoading: false,
+  selectedUsageSummary: null,
+  selectedUsageCheckedAt: null,
+  selectedUsageError: "",
   pairingInfo: null,
   pairingLoading: false,
   pairingError: "",
@@ -35,7 +136,9 @@ const state = {
   activeTab: "overview",
   busy: false,
   timerId: null,
+  pairingTimerId: null,
   lastLoadedAt: null,
+  detailRequestToken: 0,
 };
 
 const elements = {
@@ -143,40 +246,15 @@ function resolveStoredActiveTab() {
 }
 
 function defaultModelChannelSettings() {
-  return {
-    userCanConfigureModels: false,
-    channels: [],
-    channelGroups: [],
-  };
+  return defaultModelChannelSettingsSection();
 }
 
 function ensureModelChannelCatalogShape(payload) {
-  const channels = Array.isArray(payload?.channels) ? payload.channels : [];
-  return {
-    userCanConfigureModels: Boolean(payload?.userCanConfigureModels),
-    channels: channels
-      .map((item) => ({
-        id: String(item?.id || "").trim(),
-        name: String(item?.name || item?.id || "").trim(),
-        kind: item?.kind === "group" ? "group" : "channel",
-        providerId: String(item?.providerId || "").trim(),
-        defaultModel: String(item?.defaultModel || "").trim(),
-        channelCount:
-          typeof item?.channelCount === "number" && Number.isFinite(item.channelCount)
-            ? item.channelCount
-            : null,
-        strategy: item?.strategy === "round-robin" ? "round-robin" : "",
-      }))
-      .filter((item) => item.id),
-  };
+  return ensureModelChannelCatalogShapeSection(payload);
 }
 
 function normalizeModelChannelSettingsForEditor(value) {
-  return {
-    userCanConfigureModels: Boolean(value?.userCanConfigureModels),
-    channels: Array.isArray(value?.channels) ? value.channels : [],
-    channelGroups: Array.isArray(value?.channelGroups) ? value.channelGroups : [],
-  };
+  return normalizeModelChannelSettingsForEditorSection(value);
 }
 
 function formatModelChannelLabel(channelId) {
@@ -197,49 +275,19 @@ function formatModelChannelLabel(channelId) {
 }
 
 function normalizeApiBase(value) {
-  return value.trim().replace(/\/+$/, "");
+  return normalizeApiBaseSection(value);
 }
 
 function isAbsoluteHttpUrl(value) {
-  return /^https?:\/\//i.test(value);
+  return isAbsoluteHttpUrlSection(value);
 }
 
 function normalizeApiPath(path) {
-  if (!path) {
-    return "/";
-  }
-  return path.startsWith("/") ? path : `/${path}`;
+  return normalizeApiPathSection(path);
 }
 
 function joinApiUrl(base, path) {
-  const normalizedPath = normalizeApiPath(path);
-  const normalizedBase = normalizeApiBase(base ?? "");
-  if (!normalizedBase) {
-    return normalizedPath;
-  }
-  if (isAbsoluteHttpUrl(normalizedBase)) {
-    try {
-      const url = new URL(normalizedBase);
-      const basePath = normalizeApiPath(url.pathname).replace(/\/+$/, "") || "/";
-      if (normalizedPath === basePath || normalizedPath.startsWith(`${basePath}/`)) {
-        return `${url.origin}${normalizedPath}`;
-      }
-      if (basePath === "/api" && normalizedPath.startsWith("/api/")) {
-        return `${url.origin}${normalizedPath}`;
-      }
-    } catch {
-      // Fall back to direct concatenation below when URL parsing fails.
-    }
-    return `${normalizedBase}${normalizedPath}`;
-  }
-  const basePath = normalizedBase.startsWith("/") ? normalizedBase : `/${normalizedBase}`;
-  if (normalizedPath === basePath || normalizedPath.startsWith(`${basePath}/`)) {
-    return normalizedPath;
-  }
-  if (basePath === "/api" && normalizedPath.startsWith("/api/")) {
-    return normalizedPath;
-  }
-  return `${basePath}${normalizedPath}`;
+  return joinApiUrlSection(base, path);
 }
 
 function isAdminModeEnabled() {
@@ -297,84 +345,31 @@ function setBusy(nextBusy) {
 }
 
 function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+  return escapeHtmlSection(value);
 }
 
 function formatRelativeTime(value) {
-  if (!value) {
-    return "刚刚";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return String(value);
-  }
-  const diffMs = date.getTime() - Date.now();
-  const absMinutes = Math.round(Math.abs(diffMs) / 60000);
-  if (absMinutes < 1) {
-    return "刚刚";
-  }
-  if (absMinutes < 60) {
-    return diffMs >= 0 ? `${absMinutes} 分钟后` : `${absMinutes} 分钟前`;
-  }
-  const absHours = Math.round(absMinutes / 60);
-  if (absHours < 48) {
-    return diffMs >= 0 ? `${absHours} 小时后` : `${absHours} 小时前`;
-  }
-  const absDays = Math.round(absHours / 24);
-  return diffMs >= 0 ? `${absDays} 天后` : `${absDays} 天前`;
+  return formatRelativeTimeSection(value);
 }
 
 function formatDateTime(value) {
-  if (!value) {
-    return "n/a";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return String(value);
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(date);
+  return formatDateTimeSection(value);
 }
 
 function formatMaybe(value) {
-  if (value == null || value === "") {
-    return "n/a";
-  }
-  return String(value);
+  return formatMaybeSection(value);
 }
 
 function instanceRuntimeLocation(item) {
-  if (item?.runtime?.location === "container") {
-    return "container";
-  }
-  return "host";
+  return instanceRuntimeLocationSection(item);
 }
 
 function instanceRuntimeChipLabel(item) {
-  if (instanceRuntimeLocation(item) === "container") {
-    return item?.runtime?.containerName ? `容器 ${item.runtime.containerName}` : "容器运行";
-  }
-  return "宿主机";
+  return instanceRuntimeChipLabelSection(item);
 }
 
 function instanceRuntimeDescription(item) {
-  if (instanceRuntimeLocation(item) === "container") {
-    return item?.runtime?.containerName
-      ? `当前运行在容器 ${item.runtime.containerName}`
-      : "当前被标记为容器运行，但还没有容器名称";
-  }
-  return "当前直接运行在宿主机上";
+  return instanceRuntimeDescriptionSection(item);
 }
 
 function setActiveTab(nextTab, { persist = true } = {}) {
@@ -402,16 +397,7 @@ function setActiveTab(nextTab, { persist = true } = {}) {
 }
 
 function buildFallbackContainerMeta(instances, error = null) {
-  return {
-    available: false,
-    error,
-    totalDockerContainers: 0,
-    relevantContainerCount: 0,
-    linkedContainerCount: 0,
-    hostInstanceCount: instances.filter((item) => instanceRuntimeLocation(item) === "host").length,
-    containerInstanceCount: instances.filter((item) => instanceRuntimeLocation(item) === "container").length,
-    hiddenDockerContainerCount: 0,
-  };
+  return buildFallbackContainerMetaSection(instances, error);
 }
 
 function findContainerByName(name) {
@@ -423,11 +409,11 @@ function isProvisionedConsoleContainer(container) {
 }
 
 function instanceApiBase(scope) {
-  return scope === "dedicated" ? "/api/dedicated-instances" : "/api/instances";
+  return instanceApiBaseSection(scope);
 }
 
 function instanceScopeLabel(scope) {
-  return scope === "dedicated" ? "单独实例" : "共享实例";
+  return instanceScopeLabelSection(scope);
 }
 
 function aggregateCounts(instances, key) {
@@ -445,110 +431,27 @@ function aggregateCounts(instances, key) {
 }
 
 function explainOutcome(key) {
-  switch (key) {
-    case "tool_routed_executed":
-      return "已走共享执行通道并完成";
-    case "tool_local_executed":
-      return "已在当前实例本地完成";
-    case "tool_route_unavailable":
-      return "共享模式下暂不支持";
-    case "tool_denied":
-      return "被共享限制拦截";
-    default:
-      return key;
-  }
+  return explainOutcomeSection(key);
 }
 
 function explainRouteType(key) {
-  switch (key) {
-    case "worker":
-      return "共享执行通道";
-    case "local":
-      return "实例本地处理";
-    default:
-      return key;
-  }
+  return explainRouteTypeSection(key);
 }
 
 function explainRuleId(key) {
-  if (key === "default.local.v1") {
-    return "默认走实例本地处理";
-  }
-  if (key === "shared.nodes.worker.v1") {
-    return "节点能力的共享限制";
-  }
-  if (key === "shared.browser.worker.v1") {
-    return "浏览器能力的共享限制";
-  }
-  if (key.includes("local-path-boundary")) {
-    return "本地文件来源超出允许范围";
-  }
-  if (key.includes("max-bytes")) {
-    return "上传内容大小超过共享限制";
-  }
-  if (key.includes("max-images")) {
-    return "图片数量超过共享限制";
-  }
-  if (key.includes("message.file-path")) {
-    return "消息附件路径不在允许范围";
-  }
-  return key;
+  return explainRuleIdSection(key);
 }
 
 function explainToolName(key) {
-  switch (key) {
-    case "browser":
-      return "浏览器能力";
-    case "nodes":
-      return "节点能力";
-    case "message":
-      return "消息能力";
-    case "image":
-      return "图片能力";
-    case "pdf":
-      return "PDF 能力";
-    default:
-      return key;
-  }
+  return explainToolNameSection(key);
 }
 
 function explainToolAction(key) {
-  if (!key) {
-    return key;
-  }
-  if (key.startsWith("browser")) {
-    return `浏览器能力 / ${key}`;
-  }
-  if (key.startsWith("nodes")) {
-    return `节点能力 / ${key}`;
-  }
-  if (key.startsWith("message")) {
-    return `消息能力 / ${key}`;
-  }
-  if (key.startsWith("image")) {
-    return `图片能力 / ${key}`;
-  }
-  if (key.startsWith("pdf")) {
-    return `PDF 能力 / ${key}`;
-  }
-  return key;
+  return explainToolActionSection(key);
 }
 
 function explainHotspotValue(kind, key) {
-  switch (kind) {
-    case "rule":
-      return explainRuleId(key);
-    case "denied":
-      return key;
-    case "outcome":
-      return explainOutcome(key);
-    case "toolAction":
-      return explainToolAction(key);
-    case "routeType":
-      return explainRouteType(key);
-    default:
-      return key;
-  }
+  return explainHotspotValueSection(kind, key);
 }
 
 function probeHealthLabel(item) {
@@ -574,100 +477,41 @@ function processStateLabel(item) {
 }
 
 function statusKindLabel(kind) {
-  switch (kind) {
-    case "success":
-      return "成功";
-    case "error":
-      return "失败";
-    default:
-      return "提示";
-  }
+  return statusKindLabelSection(kind);
 }
 
 function describeInstanceAction(action) {
-  switch (action) {
-    case "start":
-      return "启动";
-    case "stop":
-      return "停止";
-    case "restart":
-      return "重启";
-    default:
-      return action;
-  }
+  return describeInstanceActionSection(action);
 }
 
 function describeContainerAction(action) {
-  switch (action) {
-    case "start":
-      return "启动";
-    case "stop":
-      return "停止";
-    case "restart":
-      return "重启";
-    case "logs":
-      return "查看日志";
-    default:
-      return action;
-  }
+  return describeContainerActionSection(action);
 }
 
 function buildWatchNote(item) {
-  if (item.process?.state !== "running") {
-    return "实例当前未运行，暂时不能接单。";
-  }
-  if (item.probe?.error) {
-    return item.probe.error;
-  }
-  if (item.probe?.checkedAt == null) {
-    return "实例正在运行，但还没有拿到最近一次检查结果。";
-  }
-  if (item.probe?.live === false && item.probe?.ready === false) {
-    return "存活检查和就绪检查都没有通过，需要尽快处理。";
-  }
-  if (item.probe?.live === false) {
-    return "存活检查没有通过，实例可能已经掉线。";
-  }
-  if (item.probe?.ready === false) {
-    return "就绪检查没有通过，实例可能暂时不能接单。";
-  }
-  if (instanceRuntimeLocation(item) === "container") {
-    return "实例服务已就绪，请通过值班台代理入口打开 UI，不要直接访问宿主机随机端口。";
-  }
-  return `最近一次检查：存活 ${formatMaybe(item.probe?.live)} / 就绪 ${formatMaybe(item.probe?.ready)}`;
-}
-
-function instanceUiProxyPath(scope, id) {
-  return `${instanceApiBase(scope)}/${encodeURIComponent(id)}/ui/`;
+  return buildWatchNoteSection(item, { instanceRuntimeLocation, formatMaybe });
 }
 
 function buildUiUrlWithOperatorScopes(baseUrl, scopes) {
-  if (!Array.isArray(scopes) || scopes.length === 0) {
-    return baseUrl;
-  }
-  try {
-    const url = new URL(baseUrl);
-    url.searchParams.set("operatorScopes", scopes.join(","));
-    return url.toString();
-  } catch {
-    const separator = baseUrl.includes("?") ? "&" : "?";
-    return `${baseUrl}${separator}operatorScopes=${encodeURIComponent(scopes.join(","))}`;
-  }
+  return buildUiUrlWithOperatorScopesSection(baseUrl, scopes);
 }
 
 function resolveUserInstanceUiScopes() {
-  return state.modelChannelCatalog.userCanConfigureModels ? [] : ["operator.read", "operator.write"];
+  return resolveUserInstanceUiScopesSection(state.modelChannelCatalog);
 }
 
 function resolveInstanceUiUrl(scope, id, { userScoped = false } = {}) {
-  const proxyPath = instanceUiProxyPath(scope, id);
-  let resolved;
-  try {
-    resolved = new URL(joinApiUrl(state.apiBase || "", proxyPath), window.location.origin).toString();
-  } catch {
-    resolved = joinApiUrl(state.apiBase || "", proxyPath);
-  }
-  return userScoped ? buildUiUrlWithOperatorScopes(resolved, resolveUserInstanceUiScopes()) : resolved;
+  return resolveInstanceUiUrlSection({
+    scope,
+    id,
+    userScoped,
+    apiBase: state.apiBase || "",
+    origin: window.location.origin,
+    instanceApiBase,
+    joinApiUrl,
+    resolveUserInstanceUiScopes: () => resolveUserInstanceUiScopes(),
+    modelChannelCatalog: state.modelChannelCatalog,
+  });
 }
 
 async function copyText(text, promptTitle) {
@@ -680,13 +524,20 @@ async function copyText(text, promptTitle) {
 }
 
 function canOpenInstanceUi(item) {
-  return Boolean(item?.port) && item?.process?.state === "running";
+  return canOpenInstanceUiSection(item);
 }
 
 function resetPairingState() {
   state.pairingInfo = null;
   state.pairingLoading = false;
   state.pairingError = "";
+}
+
+function resetUsageState() {
+  state.selectedUsageLoading = false;
+  state.selectedUsageSummary = null;
+  state.selectedUsageCheckedAt = null;
+  state.selectedUsageError = "";
 }
 
 async function fetchJson(path, options = {}) {
@@ -713,29 +564,25 @@ async function fetchJson(path, options = {}) {
 }
 
 async function loadModelChannelConfig({ announce = false } = {}) {
-  const payload = await fetchJson("/api/model-channels", {
-    adminAuth: isAdminModeEnabled(),
+  return loadModelChannelConfigSection({
+    state,
+    announce,
+    fetchJson,
+    isAdminModeEnabled,
+    ensureModelChannelCatalogShape,
+    normalizeModelChannelSettingsForEditor,
+    pushStatus,
   });
-  state.modelChannelCatalog = ensureModelChannelCatalogShape(payload?.catalog);
-  if (payload?.admin && payload?.settings) {
-    state.modelChannelSettings = normalizeModelChannelSettingsForEditor(payload.settings);
-    state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
-  } else if (!isAdminModeEnabled()) {
-    state.modelChannelSettings = null;
-    state.modelChannelSettingsText = "";
-  }
-  if (announce) {
-    pushStatus(
-      "info",
-      "已加载模型渠道配置",
-      `${state.modelChannelCatalog.channels.length} 个渠道，用户自配模型：${state.modelChannelCatalog.userCanConfigureModels ? "开启" : "关闭"}`,
-    );
-  }
 }
 
 function buildModelChannelSettingsDraft() {
   const raw = elements.modelChannelsTextarea?.value?.trim() || "{}";
-  const parsed = JSON.parse(raw);
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`JSON 解析失败：${error.message}`);
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("模型渠道配置必须是 JSON 对象。");
   }
@@ -895,13 +742,7 @@ function renderWatchlist() {
 }
 
 function topEntries(record, limit = 6) {
-  if (!record || typeof record !== "object") {
-    return [];
-  }
-  return Object.entries(record)
-    .sort((left, right) => Number(right[1]) - Number(left[1]))
-    .slice(0, limit)
-    .map(([key, value]) => [key, Number(value)]);
+  return topEntriesSection(record, limit);
 }
 
 function renderHotspots() {
@@ -1130,6 +971,14 @@ function renderModelChannelSelects() {
 }
 
 function renderModelChannelsPanel() {
+  return renderModelChannelsPanelSection({
+    state,
+    elements,
+    isAdminModeEnabled,
+    defaultModelChannelSettings,
+    ensureModelChannelGenerateCardsInitialized,
+    setModelChannelGenerateCardsDisabled,
+  });
   if (
     !elements.modelChannelsPanel ||
     !elements.modelChannelsTextarea ||
@@ -1188,20 +1037,7 @@ function syncCreateFormConstraints() {
 }
 
 function normalizeBindModeInput(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  if (!raw) {
-    return "";
-  }
-  if (raw === "127.0.0.1" || raw === "localhost" || raw === "loopback") {
-    return "loopback";
-  }
-  if (raw === "0.0.0.0" || raw === "lan" || raw === "all" || raw === "any") {
-    return "lan";
-  }
-  if (raw === "tailnet" || raw === "auto" || raw === "custom") {
-    return raw;
-  }
-  return raw;
+  return normalizeBindModeInputSection(value);
 }
 
 function renderContainerLogs() {
@@ -1308,6 +1144,18 @@ function renderDedicatedInstancesList() {
 }
 
 function renderMetaGrid(item) {
+  return renderMetaGridSection({
+    state,
+    elements,
+    item,
+    instanceScopeLabel,
+    formatModelChannelLabel,
+    instanceRuntimeLocation,
+    formatDateTime,
+    instanceRuntimeDescription,
+    escapeHtml,
+    formatMaybe,
+  });
   const entries = [
     ["实例类型", instanceScopeLabel(state.selectedScope)],
     ["实例 ID", item.id],
@@ -1346,46 +1194,19 @@ function renderMetaGrid(item) {
     .join("");
 }
 
+function buildDiagnosticsNote(item) {
+  return buildDiagnosticsNoteSection({ state, item, escapeHtml, formatRelativeTime });
+}
+
 function renderProbeGrid(item) {
-  if (!item.probe) {
-    elements.probeGrid.innerHTML =
-      '<div class="empty-state" style="min-height: 180px; grid-column: 1 / -1;">当前还没有检查结果。可以先刷新，或确认这个实例已经启动。</div>';
-    return;
-  }
-
-  const pills = [
-    {
-      label: "存活检查",
-      value: item.probe.live == null ? "未返回" : item.probe.live ? "通过" : "未通过",
-      className: item.probe.live === true ? "probe-pill-success" : item.probe.live === false ? "probe-pill-danger" : "",
-    },
-    {
-      label: "就绪检查",
-      value: item.probe.ready == null ? "未返回" : item.probe.ready ? "通过" : "未通过",
-      className: item.probe.ready === true ? "probe-pill-success" : item.probe.ready === false ? "probe-pill-danger" : "",
-    },
-    {
-      label: "最近检查时间",
-      value: formatDateTime(item.probe.checkedAt),
-      className: "",
-    },
-    {
-      label: "错误说明",
-      value: item.probe.error || "没有错误",
-      className: item.probe.error ? "probe-pill-warning" : "",
-    },
-  ];
-
-  elements.probeGrid.innerHTML = pills
-    .map(
-      (entry) => `
-        <div class="probe-item">
-          <span class="probe-label">${escapeHtml(entry.label)}</span>
-          <div class="probe-value"><span class="probe-pill ${entry.className}">${escapeHtml(entry.value)}</span></div>
-        </div>
-      `,
-    )
-    .join("");
+  return renderProbeGridSection({
+    state,
+    elements,
+    item,
+    escapeHtml,
+    formatDateTime,
+    buildDiagnosticsNote,
+  });
 }
 
 function buildUsageTable(title, rows) {
@@ -1419,212 +1240,77 @@ function buildUsageTable(title, rows) {
 }
 
 function renderUsageSummary(item) {
-  const summary = item.probe?.usageSummary;
-  if (!summary) {
-    elements.usageSummary.innerHTML =
-      '<div class="empty-state" style="min-height: 180px; grid-column: 1 / -1;">这个实例暂时还没有可用的使用记录汇总。</div>';
-    return;
-  }
-
-  const cards = [
-    buildUsageTable(
-      "这个实例最近的请求结果",
-      topEntries(summary.countsByOutcome).map(([key, value]) => [explainOutcome(key), value]),
-    ),
-    buildUsageTable(
-      "这个实例最近最常用的能力类别",
-      topEntries(summary.countsByToolName).map(([key, value]) => [explainToolName(key), value]),
-    ),
-    buildUsageTable(
-      "这个实例最近最常用的具体能力",
-      topEntries(summary.countsByToolNameAction).map(([key, value]) => [explainToolAction(key), value]),
-    ),
-    buildUsageTable(
-      "这个实例的请求主要在哪里完成",
-      topEntries(summary.countsByRouteType).map(([key, value]) => [explainRouteType(key), value]),
-    ),
-    buildUsageTable(
-      "这个实例最近最常碰到的共享限制",
-      topEntries(summary.countsByRuleId).map(([key, value]) => [explainRuleId(key), value]),
-    ),
-    buildUsageTable("这个实例最近最常见的失败原因", topEntries(summary.countsByDeniedReason)),
-  ];
-
-  const totalCount = Number(summary.totalCount ?? 0);
-  const filePath = summary.filePath
-    ? `<p class="connection-note">统计文件：<code>${escapeHtml(summary.filePath)}</code></p>`
-    : "";
-
-  elements.usageSummary.innerHTML = `
-    <section class="detail-card" style="grid-column: 1 / -1;">
-      <div class="detail-card-header">
-        <h3>最近调用总览</h3>
-        <span class="chip chip-success">调用记录 ${escapeHtml(totalCount)}</span>
-      </div>
-      ${filePath}
-    </section>
-    ${cards.join("")}
-  `;
+  return renderUsageSummarySection({
+    state,
+    elements,
+    item,
+    escapeHtml,
+    formatRelativeTime,
+    buildDiagnosticsNote,
+    buildUsageTable,
+    topEntries,
+    explainOutcome,
+    explainToolName,
+    explainToolAction,
+    explainRouteType,
+    explainRuleId,
+  });
 }
 
 function renderPairingSummary() {
-  if (!elements.pairingSummary) {
-    return;
-  }
-  if (!state.selectedItem) {
-    elements.pairingSummary.innerHTML = `<p class="connection-note">选择实例后可查看设备配对状态。</p>`;
-    return;
-  }
-  if (!state.adminModeAvailable) {
-    elements.pairingSummary.innerHTML = `<p class="connection-note">当前服务器未启用管理员模式，无法查看设备配对。</p>`;
-    return;
-  }
-  if (!isAdminModeEnabled()) {
-    elements.pairingSummary.innerHTML =
-      `<p class="connection-note">进入管理员模式后，可查看待配对设备并一键批准最新请求。</p>`;
-    return;
-  }
-  if (state.pairingLoading) {
-    elements.pairingSummary.innerHTML = `<p class="connection-note">正在加载该实例的设备配对状态...</p>`;
-    return;
-  }
-  if (state.pairingError) {
-    elements.pairingSummary.innerHTML = `<p class="connection-note">${escapeHtml(state.pairingError)}</p>`;
-    return;
-  }
-
-  const pairing = state.pairingInfo || {};
-  const pending = Array.isArray(pairing.pending) ? pairing.pending : [];
-  const paired = Array.isArray(pairing.paired) ? pairing.paired : [];
-  const latestPending =
-    pending.length > 0
-      ? [...pending].sort((left, right) => Number(right?.ts ?? 0) - Number(left?.ts ?? 0))[0]
-      : null;
-
-  const pendingMarkup =
-    pending.length > 0
-      ? pending
-          .slice(0, 5)
-          .map((entry) => {
-            const name = entry.displayName || entry.deviceId || "未命名设备";
-            const requestId = entry.requestId || "unknown";
-            const role = entry.role || (Array.isArray(entry.roles) ? entry.roles.join(", ") : "") || "unknown";
-            const scopes = Array.isArray(entry.scopes) && entry.scopes.length > 0 ? entry.scopes.join(", ") : "未声明";
-            return `<article class="callout"><strong>${escapeHtml(name)}</strong><br />请求 ID：<code>${escapeHtml(requestId)}</code><br />角色：${escapeHtml(role)}<br />范围：${escapeHtml(scopes)}</article>`;
-          })
-          .join("")
-      : `<p class="connection-note">当前没有待批准的设备配对请求。</p>`;
-
-  const pairedMarkup =
-    paired.length > 0
-      ? `<p class="connection-note">已配对设备 ${escapeHtml(paired.length)} 台。${
-          paired[0]?.displayName || paired[0]?.deviceId
-            ? `最近设备：<code>${escapeHtml(paired[0].displayName || paired[0].deviceId)}</code>`
-            : ""
-        }</p>`
-      : `<p class="connection-note">当前还没有已配对设备。</p>`;
-
-  elements.pairingSummary.innerHTML = `
-    <section class="detail-card" style="grid-column: 1 / -1;">
-      <div class="detail-card-header">
-        <h3>配对总览</h3>
-        <div class="inline-actions">
-          <span class="chip ${pending.length > 0 ? "chip-danger" : "chip-success"}">待批准 ${escapeHtml(pending.length)}</span>
-          <span class="chip ${paired.length > 0 ? "chip-success" : ""}">已配对 ${escapeHtml(paired.length)}</span>
-        </div>
-      </div>
-      ${
-        latestPending
-          ? `<p class="connection-note">最新请求：<code>${escapeHtml(latestPending.requestId || "unknown")}</code> / ${escapeHtml(latestPending.displayName || latestPending.deviceId || "未命名设备")}</p>`
-          : `<p class="connection-note">当前没有新的待批准配对。</p>`
-      }
-      ${pendingMarkup}
-      ${pairedMarkup}
-    </section>
-  `;
+  return renderPairingSummarySection({
+    elements,
+    state,
+    escapeHtml,
+    isAdminModeEnabled,
+  });
 }
 
-function renderDetail() {
-  const item = state.selectedItem;
-  if (!item) {
-    elements.detailBadge.textContent = "未选择实例";
-    elements.detailEmpty.classList.remove("hidden");
-    elements.detailContent.classList.add("hidden");
-    if (elements.openUiButton) {
-      elements.openUiButton.disabled = true;
-    }
-    if (elements.copyTokenButton) {
-      elements.copyTokenButton.classList.add("hidden");
-      elements.copyTokenButton.disabled = true;
-    }
-    if (elements.copyUiLinkButton) {
-      elements.copyUiLinkButton.disabled = true;
-    }
-    if (elements.copyLoginGuideButton) {
-      elements.copyLoginGuideButton.classList.add("hidden");
-      elements.copyLoginGuideButton.disabled = true;
-    }
-    if (elements.refreshPairingButton) {
-      elements.refreshPairingButton.classList.add("hidden");
-      elements.refreshPairingButton.disabled = true;
-    }
-    if (elements.approveLatestPairingButton) {
-      elements.approveLatestPairingButton.classList.add("hidden");
-      elements.approveLatestPairingButton.disabled = true;
-    }
-    renderPairingSummary();
-    updateAdminModeUi();
-    return;
-  }
+function renderDetailEmptyState() {
+  return renderDetailEmptyStateSection({
+    elements,
+    renderPairingSummary,
+    updateAdminModeUi,
+  });
+}
 
-  elements.detailBadge.textContent = item.id;
-  elements.detailTitle.textContent = item.name || item.id;
-  elements.renameInput.value = item.name || "";
-  renderModelChannelSelect(elements.detailModelChannelSelect, item.modelChannelId || "");
-  if (elements.detailModelChannelSelect) {
-    elements.detailModelChannelSelect.disabled = false;
-  }
-  if (elements.saveDetailModelChannelButton) {
-    elements.saveDetailModelChannelButton.disabled = false;
-  }
-  if (elements.openUiButton) {
-    elements.openUiButton.disabled = !canOpenInstanceUi(item);
-    elements.openUiButton.title =
-      instanceRuntimeLocation(item) === "container"
-        ? "通过 Shared Console 代理打开容器内实例 UI"
-        : "通过 Shared Console 代理打开实例 UI";
-  }
-  if (elements.copyUiLinkButton) {
-    elements.copyUiLinkButton.disabled = !canOpenInstanceUi(item);
-    elements.copyUiLinkButton.title =
-      instanceRuntimeLocation(item) === "container"
-        ? "复制该实例经 Shared Console 代理的 UI 地址"
-        : "复制该实例经 Shared Console 代理的 UI 地址";
-  }
-  if (elements.copyTokenButton) {
-    elements.copyTokenButton.disabled = !isAdminModeEnabled();
-    elements.copyTokenButton.classList.toggle("hidden", !isAdminModeEnabled());
-  }
-  if (elements.refreshPairingButton) {
-    elements.refreshPairingButton.disabled = !isAdminModeEnabled();
-    elements.refreshPairingButton.classList.toggle("hidden", !isAdminModeEnabled());
-  }
-  if (elements.approveLatestPairingButton) {
-    const pending = Array.isArray(state.pairingInfo?.pending) ? state.pairingInfo.pending : [];
-    elements.approveLatestPairingButton.disabled = !isAdminModeEnabled() || !canOpenInstanceUi(item) || state.pairingLoading || pending.length === 0;
-    elements.approveLatestPairingButton.classList.toggle("hidden", !isAdminModeEnabled());
-  }
-  if (elements.copyLoginGuideButton) {
-    elements.copyLoginGuideButton.disabled = !isAdminModeEnabled() || !canOpenInstanceUi(item);
-    elements.copyLoginGuideButton.classList.toggle("hidden", !isAdminModeEnabled());
-  }
-  renderMetaGrid(item);
-  renderPairingSummary();
-  renderProbeGrid(item);
-  renderUsageSummary(item);
-  elements.detailEmpty.classList.add("hidden");
-  elements.detailContent.classList.remove("hidden");
-  updateAdminModeUi();
+function renderDetailActionState(item) {
+  return renderDetailActionStateSection({
+    elements,
+    state,
+    item,
+    canOpenInstanceUi,
+    instanceRuntimeLocation,
+    isAdminModeEnabled,
+  });
+}
+
+function renderDetailContentSections(item) {
+  return renderDetailContentSectionsSection({
+    elements,
+    item,
+    renderMetaGrid,
+    renderPairingSummary,
+    renderProbeGrid,
+    renderUsageSummary,
+    updateAdminModeUi,
+  });
+}
+
+
+function renderDetail() {
+  return renderDetailSection({
+    state,
+    elements,
+    isAdminModeEnabled,
+    renderModelChannelSelect,
+    canOpenInstanceUi,
+    renderMetaGrid,
+    renderPairingSummary,
+    renderProbeGrid,
+    renderUsageSummary,
+    updateAdminModeUi,
+  });
 }
 
 function renderAll() {
@@ -1647,103 +1333,76 @@ function updateConnectionNote(message, isError = false) {
 }
 
 async function loadInstanceDetail(scope, id, announce = true) {
-  const payload = await fetchJson(`${instanceApiBase(scope)}/${encodeURIComponent(id)}?includeProbe=1`);
-  state.selectedScope = scope;
-  state.selectedId = id;
-  state.selectedItem = payload.item;
-  resetPairingState();
-  if (isAdminModeEnabled()) {
-    try {
-      await loadSelectedInstancePairing({ announce: false });
-    } catch {
-      // Keep instance detail usable even if pairing diagnostics fail.
-    }
-  }
-  if (announce) {
-    pushStatus("info", `已切换到${instanceScopeLabel(scope)} ${id}`, payload.item?.probe?.version || "暂无版本信息");
-  }
+  return loadInstanceDetailSection({
+    state,
+    scope,
+    id,
+    announce,
+    fetchJson,
+    instanceApiBase,
+    applySelectedInstanceCore,
+    resetPairingState,
+    resetUsageState,
+    renderDetail,
+    refreshSelectedInstanceAsync,
+    isAdminModeEnabled,
+    loadInstanceDiagnostics,
+    loadInstanceUsageSummary,
+    loadSelectedInstancePairing,
+    configurePairingAutoRefresh,
+    pushStatus,
+    instanceScopeLabel,
+    isCurrentDetailRequest,
+  });
+}
+
+async function loadInstanceDiagnostics(scope, id, requestToken = state.detailRequestToken) {
+  return loadInstanceDiagnosticsSection({
+    state,
+    scope,
+    id,
+    requestToken,
+    fetchJson,
+    instanceApiBase,
+    applySelectedInstanceDiagnostics,
+    buildDiagnosticsFailureProbe,
+    isCurrentDetailRequest,
+    renderDetail,
+  });
+}
+
+async function loadInstanceUsageSummary(scope, id, requestToken = state.detailRequestToken) {
+  return loadInstanceUsageSummarySection({
+    state,
+    scope,
+    id,
+    requestToken,
+    fetchJson,
+    instanceApiBase,
+    applySelectedInstanceUsageSummary,
+    buildUsageSummaryFailureResult,
+    isCurrentDetailRequest,
+    renderDetail,
+  });
 }
 
 async function loadInstances({ preserveSelection = true } = {}) {
-  setBusy(true);
-  try {
-    const [payload, dedicatedPayload, containersPayload, modelChannelsPayload] = await Promise.all([
-      fetchJson("/api/instances?includeProbe=1"),
-      fetchJson("/api/dedicated-instances?includeProbe=1"),
-      fetchJson("/api/containers").catch((error) => ({
-        ok: false,
-        items: [],
-        meta: null,
-        error,
-      })),
-      fetchJson("/api/model-channels", {
-        adminAuth: isAdminModeEnabled(),
-      }).catch(() => null),
-    ]);
-    state.sharedInstances = payload.items ?? [];
-    state.dedicatedInstances = dedicatedPayload.items ?? [];
-    state.instances = state.sharedInstances;
-    state.containers = containersPayload?.items ?? [];
-    state.containersMeta =
-      containersPayload?.meta ??
-      buildFallbackContainerMeta(
-        [...state.sharedInstances, ...state.dedicatedInstances],
-        containersPayload?.error?.message || "容器信息暂时不可用",
-      );
-    if (modelChannelsPayload?.catalog) {
-      state.modelChannelCatalog = ensureModelChannelCatalogShape(modelChannelsPayload.catalog);
-      if (modelChannelsPayload?.admin && modelChannelsPayload?.settings) {
-        state.modelChannelSettings = normalizeModelChannelSettingsForEditor(modelChannelsPayload.settings);
-        state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
-      } else if (!isAdminModeEnabled()) {
-        state.modelChannelSettings = null;
-        state.modelChannelSettingsText = "";
-      }
-    }
-    state.lastLoadedAt = new Date().toISOString();
-
-    if (preserveSelection && state.selectedId) {
-      const activeList = state.selectedScope === "dedicated" ? state.dedicatedInstances : state.sharedInstances;
-      const selected = activeList.find((item) => item.id === state.selectedId);
-      state.selectedItem = selected ?? null;
-      if (!selected) {
-        if (state.sharedInstances[0]) {
-          state.selectedScope = "shared";
-          state.selectedId = state.sharedInstances[0].id;
-        } else if (state.dedicatedInstances[0]) {
-          state.selectedScope = "dedicated";
-          state.selectedId = state.dedicatedInstances[0].id;
-        } else {
-          state.selectedId = null;
-        }
-      }
-    } else if (!state.selectedId) {
-      if (state.sharedInstances[0]) {
-        state.selectedScope = "shared";
-        state.selectedId = state.sharedInstances[0].id;
-      } else if (state.dedicatedInstances[0]) {
-        state.selectedScope = "dedicated";
-        state.selectedId = state.dedicatedInstances[0].id;
-      } else {
-        state.selectedId = null;
-      }
-    }
-
-    if (state.selectedId) {
-      await loadInstanceDetail(state.selectedScope, state.selectedId, false);
-    } else {
-      state.selectedItem = null;
-    }
-
-    updateConnectionNote(`已连接 ${state.apiBase}，最近刷新：${formatDateTime(state.lastLoadedAt)}`);
-    renderAll();
-  } catch (error) {
-    pushStatus("error", "加载实例列表失败", error.message);
-    updateConnectionNote(`连接失败：${error.message}`, true);
-    renderAll();
-  } finally {
-    setBusy(false);
-  }
+  return loadInstancesSection({
+    state,
+    preserveSelection,
+    setBusy,
+    fetchJson,
+    isAdminModeEnabled,
+    buildFallbackContainerMeta,
+    ensureModelChannelCatalogShape,
+    normalizeModelChannelSettingsForEditor,
+    loadInstanceDetail,
+    configurePairingAutoRefresh,
+    updateConnectionNote,
+    formatDateTime,
+    renderAll,
+    pushStatus,
+  });
 }
 
 async function runInstanceAction(action) {
@@ -1824,117 +1483,58 @@ async function copySelectedInstanceUiLink() {
 }
 
 async function enableAdminMode() {
-  if (!state.adminModeAvailable) {
-    pushStatus("error", "管理员模式不可用", "当前服务器未启用管理员模式。");
-    return;
-  }
-  const token = elements.adminTokenInput.value.trim();
-  if (!token) {
-    pushStatus("error", "管理员模式不可用", "管理员口令不能为空。");
-    return;
-  }
-  await fetchJson("/api/admin/validate", { adminAuth: false, headers: { "X-Shared-Console-Admin-Token": token } });
-  state.adminToken = token;
-  sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
-  try {
-    await loadModelChannelConfig({ announce: false });
-  } catch {
-    // Keep admin mode usable even if model-channel loading fails.
-  }
-  if (state.selectedId) {
-    try {
-      await loadSelectedInstancePairing({ announce: false });
-    } catch {
-      // Admin mode itself is still valid even if the current instance pairing probe fails.
-    }
-  }
-  updateAdminModeUi();
-  renderDetail();
-  pushStatus("success", "管理员模式已启用", "现在可以复制当前实例 Token。");
+  return enableAdminModeSection({
+    state,
+    elements,
+    fetchJson,
+    updateAdminModeUi,
+    loadInstances,
+    pushStatus,
+    sessionStorageRef: sessionStorage,
+    adminTokenStorageKey: ADMIN_TOKEN_STORAGE_KEY,
+  });
 }
 
 function clearAdminMode() {
-  state.adminToken = "";
-  sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-  elements.adminTokenInput.value = "";
-  resetPairingState();
-  state.modelChannelSettings = null;
-  state.modelChannelSettingsText = "";
-  state.modelChannelEditorDirty = false;
-  updateAdminModeUi();
-  renderDetail();
-  renderModelChannelsPanel();
-  pushStatus("info", "已退出管理员模式");
+  return clearAdminModeSection({
+    state,
+    elements,
+    resetPairingState,
+    updateAdminModeUi,
+    renderAll,
+    loadInstances,
+    pushStatus,
+    sessionStorageRef: sessionStorage,
+    adminTokenStorageKey: ADMIN_TOKEN_STORAGE_KEY,
+  });
 }
 
-async function loadSelectedInstancePairing({ announce = true } = {}) {
-  if (!state.selectedItem || !state.selectedId) {
-    resetPairingState();
-    renderPairingSummary();
-    return;
-  }
-  if (!isAdminModeEnabled()) {
-    resetPairingState();
-    renderPairingSummary();
-    return;
-  }
-  state.pairingLoading = true;
-  state.pairingError = "";
-  renderPairingSummary();
-  try {
-    const payload = await fetchJson(`${instanceApiBase(state.selectedScope)}/${encodeURIComponent(state.selectedId)}/pairing`, {
-      adminAuth: true,
-    });
-    state.pairingInfo = payload?.item?.pairing ?? { pending: [], paired: [] };
-    state.pairingError = "";
-    if (announce) {
-      const pendingCount = Array.isArray(state.pairingInfo?.pending) ? state.pairingInfo.pending.length : 0;
-      pushStatus("info", `已刷新 ${state.selectedId} 配对状态`, `待批准 ${pendingCount}`);
-    }
-  } catch (error) {
-    state.pairingInfo = null;
-    state.pairingError = error.message;
-    throw error;
-  } finally {
-    state.pairingLoading = false;
-    renderDetail();
-  }
+async function loadSelectedInstancePairing({ announce = true, requestToken = state.detailRequestToken } = {}) {
+  return loadSelectedInstancePairingSection({
+    state,
+    announce,
+    requestToken,
+    resetPairingState,
+    renderPairingSummary,
+    isAdminModeEnabled,
+    fetchJson,
+    instanceApiBase,
+    isCurrentDetailRequest,
+    pushStatus,
+    renderDetail,
+  });
 }
 
 async function approveLatestSelectedInstancePairing() {
-  if (!state.selectedItem || !state.selectedId) {
-    return;
-  }
-  if (!isAdminModeEnabled()) {
-    pushStatus("error", "批准配对失败", "请先进入管理员模式。");
-    return;
-  }
-  if (!canOpenInstanceUi(state.selectedItem)) {
-    pushStatus("error", "批准配对失败", "实例尚未运行，先启动实例再处理设备配对。");
-    return;
-  }
-  state.pairingLoading = true;
-  renderDetail();
-  try {
-    const payload = await fetchJson(
-      `${instanceApiBase(state.selectedScope)}/${encodeURIComponent(state.selectedId)}/pairing/approve-latest`,
-      {
-        method: "POST",
-        adminAuth: true,
-      },
-    );
-    state.pairingInfo = payload?.item?.pairing ?? { pending: [], paired: [] };
-    state.pairingError = "";
-    const requestId = payload?.result?.requestId || "latest";
-    const deviceId = payload?.result?.device?.deviceId || "unknown-device";
-    pushStatus("success", `已批准 ${state.selectedId} 最新配对`, `${deviceId} (${requestId})`);
-  } catch (error) {
-    state.pairingError = error.message;
-    throw error;
-  } finally {
-    state.pairingLoading = false;
-    renderDetail();
-  }
+  return approveLatestSelectedInstancePairingSection({
+    state,
+    isAdminModeEnabled,
+    canOpenInstanceUi,
+    pushStatus,
+    renderDetail,
+    fetchJson,
+    instanceApiBase,
+  });
 }
 
 async function copySelectedInstanceToken() {
@@ -2201,6 +1801,20 @@ function configureAutoRefresh(enabled) {
   }
 }
 
+function configurePairingAutoRefresh(enabled) {
+  if (state.pairingTimerId) {
+    clearInterval(state.pairingTimerId);
+    state.pairingTimerId = null;
+  }
+  if (enabled && state.selectedId && isAdminModeEnabled()) {
+    state.pairingTimerId = window.setInterval(() => {
+      void loadSelectedInstancePairing({ announce: false }).catch(() => {
+        // Ignore polling failures; the next pass will retry.
+      });
+    }, PAIRING_REFRESH_INTERVAL_MS);
+  }
+}
+
 async function applyApiBase(nextApiBase) {
   const normalized = normalizeApiBase(nextApiBase);
   if (!normalized) {
@@ -2383,51 +1997,6 @@ async function loadRuntimeConfig() {
   }
 }
 
-loadModelChannelConfig = function ({ announce = false } = {}) {
-  return (async () => {
-    const payload = await fetchJson("/api/model-channels", {
-      adminAuth: isAdminModeEnabled(),
-    });
-    state.modelChannelCatalog = ensureModelChannelCatalogShape(payload?.catalog);
-    if (payload?.admin && payload?.settings) {
-      state.modelChannelSettings = normalizeModelChannelSettingsForEditor(payload.settings);
-      state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
-      state.modelChannelEditorDirty = false;
-    } else if (!isAdminModeEnabled()) {
-      state.modelChannelSettings = null;
-      state.modelChannelSettingsText = "";
-      state.modelChannelEditorDirty = false;
-    }
-    if (announce) {
-      pushStatus(
-        "info",
-        "已加载模型渠道配置",
-        `${state.modelChannelCatalog.channels.length} 个渠道，用户自配模型：${
-          state.modelChannelCatalog.userCanConfigureModels ? "开启" : "关闭"
-        }`,
-      );
-    }
-    return payload;
-  })();
-};
-
-buildModelChannelSettingsDraft = function () {
-  const raw = elements.modelChannelsTextarea?.value?.trim() || "{}";
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`JSON 解析失败：${error.message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("模型渠道配置必须是 JSON 对象。");
-  }
-  return {
-    ...parsed,
-    userCanConfigureModels: Boolean(elements.userModelConfigCheckbox?.checked),
-  };
-};
-
 function buildModelChannelGeneratorBaseSettings() {
   return elements.modelChannelsTextarea?.value?.trim()
     ? buildModelChannelSettingsDraft()
@@ -2435,307 +2004,59 @@ function buildModelChannelGeneratorBaseSettings() {
 }
 
 function splitModelChannelGeneratorList(value) {
-  return String(value || "")
-    .split(/[\r\n,，;；]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return splitModelChannelGeneratorListSection(value);
 }
 
 function buildModelChannelGeneratorSharedOptions() {
-  return {
-    api: elements.modelChannelGenerateApiInput?.value?.trim() || "openai-responses",
-    reasoning: Boolean(elements.modelChannelGenerateReasoningCheckbox?.checked),
-    allowImageInput: Boolean(elements.modelChannelGenerateImageInputCheckbox?.checked),
-    createRoundRobinGroup: Boolean(elements.modelChannelGenerateRoundRobinCheckbox?.checked),
-  };
+  return buildModelChannelGeneratorSharedOptionsSection(elements);
 }
 
 function buildSingleModelChannelGeneratorPayload(baseSettings) {
-  const sharedOptions = buildModelChannelGeneratorSharedOptions();
-  return {
-    settings: baseSettings,
-    generator: {
-      baseUrl: elements.modelChannelGenerateBaseUrlInput?.value?.trim() || "",
-      api: sharedOptions.api,
-      channelIdPrefix: elements.modelChannelGenerateIdPrefixInput?.value?.trim() || "",
-      channelNamePrefix: elements.modelChannelGenerateNamePrefixInput?.value?.trim() || "",
-      apiKeys: elements.modelChannelGenerateApiKeysTextarea?.value ?? "",
-      modelIds: elements.modelChannelGenerateModelsTextarea?.value ?? "",
-      reasoning: sharedOptions.reasoning,
-      allowImageInput: sharedOptions.allowImageInput,
-      createRoundRobinGroup: sharedOptions.createRoundRobinGroup,
-    },
-  };
+  return buildSingleModelChannelGeneratorPayloadSection(baseSettings, elements);
 }
 
 function getModelChannelGenerateCards() {
-  return Array.from(elements.modelChannelGenerateCards?.querySelectorAll(".generator-card") ?? []);
+  return getModelChannelGenerateCardsSection(elements);
 }
 
 function renumberModelChannelGenerateCards() {
-  getModelChannelGenerateCards().forEach((card, index) => {
-    const title = card.querySelector("[data-model-channel-generate-card-title]");
-    if (title) {
-      const name = readModelChannelGenerateCardField(card, "channelNamePrefix");
-      const id = readModelChannelGenerateCardField(card, "channelIdPrefix");
-      const summary = name || id;
-      title.textContent = summary ? `配置 ${index + 1} · ${summary}` : `配置 ${index + 1}`;
-    }
-  });
+  return renumberModelChannelGenerateCardsSection(elements);
 }
 
 function buildModelChannelGenerateCardDefaultValues() {
-  return {
-    channelNamePrefix: elements.modelChannelGenerateNamePrefixInput?.value?.trim() || "",
-    channelIdPrefix: elements.modelChannelGenerateIdPrefixInput?.value?.trim() || "",
-    baseUrl: elements.modelChannelGenerateBaseUrlInput?.value?.trim() || "",
-    api: elements.modelChannelGenerateApiInput?.value?.trim() || "",
-    apiKeys: elements.modelChannelGenerateApiKeysTextarea?.value?.trim() || "",
-    modelIds: elements.modelChannelGenerateModelsTextarea?.value?.trim() || "",
-  };
-}
-
-function createModelChannelGenerateCard(values = {}) {
-  const channelNamePrefix = String(values.channelNamePrefix || "").trim();
-  const channelIdPrefix = String(values.channelIdPrefix || "").trim();
-  const baseUrl = String(values.baseUrl || "").trim();
-  const api = String(values.api || "").trim();
-  const modelIds = String(values.modelIds || "").trim();
-  const apiKeys = String(values.apiKeys || "").trim();
-  const card = document.createElement("section");
-  card.className = "generator-card";
-  card.innerHTML = `
-    <div class="generator-card-header">
-      <p class="generator-card-title" data-model-channel-generate-card-title>配置</p>
-      <div class="inline-actions">
-        <button class="button" type="button" data-action="duplicate-model-channel-generate-card">
-          复制卡片
-        </button>
-        <button class="button" type="button" data-action="remove-model-channel-generate-card">
-          删除此卡片
-        </button>
-      </div>
-    </div>
-    <div class="generator-card-grid">
-      <label class="field">
-        <span>渠道名称前缀</span>
-        <input
-          data-field="channelNamePrefix"
-          type="text"
-          spellcheck="false"
-          placeholder="OpenAI Main"
-          value="${escapeHtml(channelNamePrefix)}"
-        />
-      </label>
-      <label class="field">
-        <span>渠道 ID 前缀</span>
-        <input
-          data-field="channelIdPrefix"
-          type="text"
-          spellcheck="false"
-          placeholder="openai-main"
-          value="${escapeHtml(channelIdPrefix)}"
-        />
-      </label>
-      <label class="field">
-        <span>渠道 URL</span>
-        <input
-          data-field="baseUrl"
-          type="text"
-          spellcheck="false"
-          placeholder="https://api.openai.com/v1"
-          value="${escapeHtml(baseUrl)}"
-        />
-      </label>
-      <label class="field">
-        <span>API 类型（可选）</span>
-        <input
-          data-field="api"
-          type="text"
-          spellcheck="false"
-          placeholder="留空时沿用上方 API 类型"
-          value="${escapeHtml(api)}"
-        />
-      </label>
-      <label class="field field-span-2">
-        <span>模型 ID（每行一个）</span>
-        <textarea
-          data-field="modelIds"
-          rows="3"
-          spellcheck="false"
-          placeholder="gpt-5-mini"
-        >${escapeHtml(modelIds)}</textarea>
-      </label>
-      <label class="field field-span-2">
-        <span>API Key（每行一个）</span>
-        <textarea
-          data-field="apiKeys"
-          rows="3"
-          spellcheck="false"
-          placeholder="sk-xxx"
-        >${escapeHtml(apiKeys)}</textarea>
-      </label>
-    </div>
-  `;
-  return card;
+  return buildModelChannelGenerateCardDefaultValuesSection(elements);
 }
 
 function appendModelChannelGenerateCard(values = {}) {
-  if (!elements.modelChannelGenerateCards) {
-    return null;
-  }
-  const card = createModelChannelGenerateCard(values);
-  elements.modelChannelGenerateCards.appendChild(card);
-  renumberModelChannelGenerateCards();
-  return card;
+  return appendModelChannelGenerateCardSection(elements, document, escapeHtml, values);
 }
 
 function clearModelChannelGenerateCards({ keepOneBlank = true } = {}) {
-  if (!elements.modelChannelGenerateCards) {
-    return;
-  }
-  elements.modelChannelGenerateCards.innerHTML = "";
-  if (keepOneBlank) {
-    appendModelChannelGenerateCard();
-  }
+  return clearModelChannelGenerateCardsSection(elements, document, escapeHtml, { keepOneBlank });
 }
 
 function ensureModelChannelGenerateCardsInitialized() {
-  if (!elements.modelChannelGenerateCards) {
-    return;
-  }
-  if (getModelChannelGenerateCards().length === 0) {
-    appendModelChannelGenerateCard();
-  }
+  return ensureModelChannelGenerateCardsInitializedSection(elements, document, escapeHtml);
 }
 
 function readModelChannelGenerateCardField(card, field) {
-  return card.querySelector(`[data-field="${field}"]`)?.value?.trim() || "";
+  return readModelChannelGenerateCardFieldSection(card, field);
 }
 
 function collectBatchCardModelChannelGenerators() {
-  const sharedOptions = buildModelChannelGeneratorSharedOptions();
-  const generators = [];
-  const cards = getModelChannelGenerateCards();
-  for (const [index, card] of cards.entries()) {
-    const channelNamePrefix = readModelChannelGenerateCardField(card, "channelNamePrefix");
-    const channelIdPrefix = readModelChannelGenerateCardField(card, "channelIdPrefix");
-    const baseUrl = readModelChannelGenerateCardField(card, "baseUrl");
-    const api = readModelChannelGenerateCardField(card, "api");
-    const modelIdsRaw = readModelChannelGenerateCardField(card, "modelIds");
-    const apiKeysRaw = readModelChannelGenerateCardField(card, "apiKeys");
-    const hasContent = [channelNamePrefix, channelIdPrefix, baseUrl, modelIdsRaw, apiKeysRaw].some(Boolean);
-    if (!hasContent) {
-      continue;
-    }
-    if (!channelNamePrefix || !channelIdPrefix || !baseUrl || !modelIdsRaw || !apiKeysRaw) {
-      throw new Error(`卡片 ${index + 1} 缺少必填字段。`);
-    }
-    const modelIds = splitModelChannelGeneratorList(modelIdsRaw);
-    const apiKeys = splitModelChannelGeneratorList(apiKeysRaw);
-    if (modelIds.length === 0) {
-      throw new Error(`卡片 ${index + 1} 至少需要填写一个模型 ID。`);
-    }
-    if (apiKeys.length === 0) {
-      throw new Error(`卡片 ${index + 1} 至少需要填写一个 API Key。`);
-    }
-    generators.push({
-      baseUrl,
-      api: api || sharedOptions.api,
-      channelIdPrefix,
-      channelNamePrefix,
-      modelIds,
-      apiKeys,
-      reasoning: sharedOptions.reasoning,
-      allowImageInput: sharedOptions.allowImageInput,
-      createRoundRobinGroup: sharedOptions.createRoundRobinGroup,
-    });
-  }
-  return generators;
+  return collectBatchCardModelChannelGeneratorsSection(elements);
 }
 
 function setModelChannelGenerateCardsDisabled(disabled) {
-  if (elements.addModelChannelGenerateCardButton) {
-    elements.addModelChannelGenerateCardButton.disabled = disabled;
-  }
-  if (elements.importModelChannelBatchButton) {
-    elements.importModelChannelBatchButton.disabled = disabled;
-  }
-  if (elements.clearModelChannelCardsButton) {
-    elements.clearModelChannelCardsButton.disabled = disabled;
-  }
-  const controls =
-    elements.modelChannelGenerateCards?.querySelectorAll("input, textarea, button") ?? [];
-  for (const control of controls) {
-    control.disabled = disabled;
-  }
+  return setModelChannelGenerateCardsDisabledSection(elements, disabled);
 }
 
 function parseBatchModelChannelGenerators(raw) {
-  const sharedOptions = buildModelChannelGeneratorSharedOptions();
-  const lines = String(raw || "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("#"));
-  if (lines.length === 0) {
-    return [];
-  }
-  return lines.map((line, index) => {
-    const parts = line.split("|").map((part) => part.trim());
-    if (parts.length < 5 || parts.length > 6) {
-      throw new Error(`批量定义第 ${index + 1} 行必须包含 5 列或 6 列，用 "|" 分隔。`);
-    }
-    const [channelNamePrefix, channelIdPrefix, baseUrl, modelIdsRaw, apiKeysRaw, apiRaw] = parts;
-    if (!channelNamePrefix || !channelIdPrefix || !baseUrl || !modelIdsRaw || !apiKeysRaw) {
-      throw new Error(`批量定义第 ${index + 1} 行缺少必填字段。`);
-    }
-    const modelIds = splitModelChannelGeneratorList(modelIdsRaw);
-    const apiKeys = splitModelChannelGeneratorList(apiKeysRaw);
-    if (modelIds.length === 0) {
-      throw new Error(`批量定义第 ${index + 1} 行至少需要填写一个模型 ID。`);
-    }
-    if (apiKeys.length === 0) {
-      throw new Error(`批量定义第 ${index + 1} 行至少需要填写一个 API Key。`);
-    }
-    return {
-      baseUrl,
-      api: apiRaw || sharedOptions.api,
-      channelIdPrefix,
-      channelNamePrefix,
-      modelIds,
-      apiKeys,
-      reasoning: sharedOptions.reasoning,
-      allowImageInput: sharedOptions.allowImageInput,
-      createRoundRobinGroup: sharedOptions.createRoundRobinGroup,
-    };
-  });
+  return parseBatchModelChannelGeneratorsSection(raw, elements);
 }
 
 function importBatchModelChannelGeneratorsAsCards(raw) {
-  const generators = parseBatchModelChannelGenerators(raw);
-  if (generators.length === 0) {
-    return 0;
-  }
-  const cards = getModelChannelGenerateCards();
-  const onlyBlankCard =
-    cards.length === 1 &&
-    ["channelNamePrefix", "channelIdPrefix", "baseUrl", "api", "modelIds", "apiKeys"].every(
-      (field) => !readModelChannelGenerateCardField(cards[0], field),
-    );
-  if (onlyBlankCard) {
-    clearModelChannelGenerateCards({ keepOneBlank: false });
-  }
-  for (const item of generators) {
-    appendModelChannelGenerateCard({
-      channelNamePrefix: item.channelNamePrefix,
-      channelIdPrefix: item.channelIdPrefix,
-      baseUrl: item.baseUrl,
-      api: item.api,
-      modelIds: Array.isArray(item.modelIds) ? item.modelIds.join("\n") : "",
-      apiKeys: Array.isArray(item.apiKeys) ? item.apiKeys.join("\n") : "",
-    });
-  }
-  return generators.length;
+  return importBatchModelChannelGeneratorsAsCardsSection(elements, document, escapeHtml, raw);
 }
 
 function formatModelChannelSaveDetail(payload) {
@@ -2754,496 +2075,83 @@ function formatModelChannelSaveDetail(payload) {
 }
 
 async function updateSelectedInstanceModelChannel(modelChannelId) {
-  if (!state.selectedId) {
-    return;
-  }
-  if (!isAdminModeEnabled()) {
-    pushStatus("error", "保存失败", "请先进入管理员模式。");
-    return;
-  }
-  setBusy(true);
-  try {
-    await fetchJson(`${instanceApiBase(state.selectedScope)}/${encodeURIComponent(state.selectedId)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ modelChannelId }),
-    });
-    pushStatus(
-      "success",
-      "实例模型渠道已更新",
-      `${state.selectedId} -> ${formatModelChannelLabel(modelChannelId || "")}`,
-    );
-    await loadInstances({ preserveSelection: true });
-  } catch (error) {
-    pushStatus("error", "实例模型渠道更新失败", error.message);
-    updateConnectionNote(`保存失败：${error.message}`, true);
-  } finally {
-    setBusy(false);
-  }
+  return updateSelectedInstanceModelChannelSection({
+    state,
+    modelChannelId,
+    isAdminModeEnabled,
+    pushStatus,
+    setBusy,
+    fetchJson,
+    instanceApiBase,
+    formatModelChannelLabel,
+    loadInstances,
+    updateConnectionNote,
+  });
 }
 
-renderModelChannelsPanel = function () {
-  if (
-    !elements.modelChannelsPanel ||
-    !elements.modelChannelsTextarea ||
-    !elements.userModelConfigCheckbox ||
-    !elements.reloadModelChannelsButton ||
-    !elements.saveModelChannelsButton
-  ) {
-    return;
-  }
-
-  const adminEnabled = isAdminModeEnabled();
-  const settings = state.modelChannelSettings || defaultModelChannelSettings();
-  ensureModelChannelGenerateCardsInitialized();
-  if (!state.modelChannelEditorDirty) {
-    elements.userModelConfigCheckbox.checked = Boolean(
-      state.modelChannelSettings?.userCanConfigureModels ?? state.modelChannelCatalog.userCanConfigureModels,
-    );
-  }
-  if (!state.modelChannelEditorDirty && (!elements.modelChannelsTextarea.value || adminEnabled)) {
-    elements.modelChannelsTextarea.value =
-      state.modelChannelSettingsText || JSON.stringify(settings, null, 2);
-  }
-  elements.userModelConfigCheckbox.disabled = !adminEnabled;
-  elements.modelChannelsTextarea.disabled = !adminEnabled;
-  if (elements.modelChannelGenerateBaseUrlInput) {
-    elements.modelChannelGenerateBaseUrlInput.disabled = !adminEnabled;
-  }
-  if (elements.modelChannelGenerateApiInput) {
-    elements.modelChannelGenerateApiInput.disabled = !adminEnabled;
-  }
-  if (elements.modelChannelGenerateIdPrefixInput) {
-    elements.modelChannelGenerateIdPrefixInput.disabled = !adminEnabled;
-  }
-  if (elements.modelChannelGenerateNamePrefixInput) {
-    elements.modelChannelGenerateNamePrefixInput.disabled = !adminEnabled;
-  }
-  if (elements.modelChannelGenerateApiKeysTextarea) {
-    elements.modelChannelGenerateApiKeysTextarea.disabled = !adminEnabled;
-  }
-  if (elements.modelChannelGenerateModelsTextarea) {
-    elements.modelChannelGenerateModelsTextarea.disabled = !adminEnabled;
-  }
-  if (elements.modelChannelGenerateBatchTextarea) {
-    elements.modelChannelGenerateBatchTextarea.disabled = !adminEnabled;
-  }
-  if (elements.modelChannelGenerateReasoningCheckbox) {
-    elements.modelChannelGenerateReasoningCheckbox.disabled = !adminEnabled;
-  }
-  if (elements.modelChannelGenerateImageInputCheckbox) {
-    elements.modelChannelGenerateImageInputCheckbox.disabled = !adminEnabled;
-  }
-  if (elements.modelChannelGenerateRoundRobinCheckbox) {
-    elements.modelChannelGenerateRoundRobinCheckbox.disabled = !adminEnabled;
-  }
-  setModelChannelGenerateCardsDisabled(!adminEnabled);
-  if (elements.generateModelChannelsButton) {
-    elements.generateModelChannelsButton.disabled = !adminEnabled;
-  }
-  if (elements.autoUnassignRemovedModelChannelsCheckbox) {
-    elements.autoUnassignRemovedModelChannelsCheckbox.disabled = !adminEnabled;
-  }
-  elements.reloadModelChannelsButton.disabled = !adminEnabled;
-  elements.saveModelChannelsButton.disabled = !adminEnabled;
-
-  if (!state.adminModeAvailable) {
-    elements.modelChannelsPanel.textContent =
-      "当前服务端未启用管理员模式，无法管理全局模型渠道。";
-    return;
-  }
-  if (!adminEnabled) {
-    elements.modelChannelsPanel.textContent =
-      "进入管理员模式后，可统一维护全局模型渠道，并决定用户是否允许自己配置模型。";
-    return;
-  }
-  elements.modelChannelsPanel.textContent = `当前共 ${state.modelChannelCatalog.channels.length} 个渠道；用户自配模型：${
-    state.modelChannelCatalog.userCanConfigureModels ? "开启" : "关闭"
-  }。保存全局渠道后，已映射实例的配置文件会同步更新；运行中的实例需要重启后生效。删除渠道时也可自动解除实例映射。`;
-};
-
-renderMetaGrid = function (item) {
-  const entries = [
-    ["实例类型", instanceScopeLabel(state.selectedScope)],
-    ["实例 ID", item.id],
-    ["显示名称", item.name],
-    ["模型渠道", formatModelChannelLabel(item.modelChannelId || "")],
-    ["运行状态", item.process?.state === "running" ? "运行中" : "未运行"],
-    ["运行位置", instanceRuntimeLocation(item) === "container" ? "容器运行" : "宿主机运行"],
-    [
-      "所属容器",
-      instanceRuntimeLocation(item) === "container"
-        ? item.runtime?.containerName || "未写入容器名"
-        : "未绑定容器",
-    ],
-    ["进程 PID", item.process?.pid],
-    ["监听地址", item.bind],
-    ["端口", item.port],
-    ["Profile", item.profile],
-    ["模板", item.template],
-    ["配置文件", item.paths?.configPath],
-    ["运行目录", item.paths?.stateDir],
-    ["日志目录", item.paths?.logDir],
-    ["创建时间", formatDateTime(item.timestamps?.createdAt)],
-    ["更新时间", formatDateTime(item.timestamps?.updatedAt)],
-    ["当前版本", item.probe?.version],
-    ["运行说明", instanceRuntimeDescription(item)],
-  ];
-
-  elements.detailMeta.innerHTML = entries
-    .map(
-      ([label, value]) => `
-        <div class="meta-item">
-          <span class="meta-label">${escapeHtml(label)}</span>
-          <div class="meta-value"><code>${escapeHtml(formatMaybe(value))}</code></div>
-        </div>
-      `,
-    )
-    .join("");
-};
-
-renderDetail = function () {
-  const item = state.selectedItem;
-  const adminEnabled = isAdminModeEnabled();
-  if (!item) {
-    elements.detailBadge.textContent = "未选择实例";
-    elements.detailEmpty.classList.remove("hidden");
-    elements.detailContent.classList.add("hidden");
-    if (elements.openUiButton) {
-      elements.openUiButton.disabled = true;
-    }
-    if (elements.copyTokenButton) {
-      elements.copyTokenButton.classList.add("hidden");
-      elements.copyTokenButton.disabled = true;
-    }
-    if (elements.copyUiLinkButton) {
-      elements.copyUiLinkButton.disabled = true;
-    }
-    if (elements.copyLoginGuideButton) {
-      elements.copyLoginGuideButton.classList.add("hidden");
-      elements.copyLoginGuideButton.disabled = true;
-    }
-    if (elements.refreshPairingButton) {
-      elements.refreshPairingButton.classList.add("hidden");
-      elements.refreshPairingButton.disabled = true;
-    }
-    if (elements.approveLatestPairingButton) {
-      elements.approveLatestPairingButton.classList.add("hidden");
-      elements.approveLatestPairingButton.disabled = true;
-    }
-    if (elements.detailModelChannelSelect) {
-      elements.detailModelChannelSelect.disabled = true;
-    }
-    if (elements.clearDetailModelChannelButton) {
-      elements.clearDetailModelChannelButton.disabled = true;
-    }
-    if (elements.saveDetailModelChannelButton) {
-      elements.saveDetailModelChannelButton.disabled = true;
-    }
-    renderPairingSummary();
-    updateAdminModeUi();
-    return;
-  }
-
-  elements.detailBadge.textContent = item.id;
-  elements.detailTitle.textContent = item.name || item.id;
-  elements.renameInput.value = item.name || "";
-  renderModelChannelSelect(elements.detailModelChannelSelect, item.modelChannelId || "");
-  if (elements.detailModelChannelSelect) {
-    elements.detailModelChannelSelect.disabled = !adminEnabled;
-  }
-  if (elements.clearDetailModelChannelButton) {
-    elements.clearDetailModelChannelButton.disabled = !adminEnabled;
-  }
-  if (elements.saveDetailModelChannelButton) {
-    elements.saveDetailModelChannelButton.disabled = !adminEnabled;
-  }
-  if (elements.openUiButton) {
-    elements.openUiButton.disabled = !canOpenInstanceUi(item);
-  }
-  if (elements.copyUiLinkButton) {
-    elements.copyUiLinkButton.disabled = !canOpenInstanceUi(item);
-  }
-  if (elements.copyTokenButton) {
-    elements.copyTokenButton.disabled = !adminEnabled;
-    elements.copyTokenButton.classList.toggle("hidden", !adminEnabled);
-  }
-  if (elements.refreshPairingButton) {
-    elements.refreshPairingButton.disabled = !adminEnabled;
-    elements.refreshPairingButton.classList.toggle("hidden", !adminEnabled);
-  }
-  if (elements.approveLatestPairingButton) {
-    const pending = Array.isArray(state.pairingInfo?.pending) ? state.pairingInfo.pending : [];
-    elements.approveLatestPairingButton.disabled =
-      !adminEnabled || !canOpenInstanceUi(item) || state.pairingLoading || pending.length === 0;
-    elements.approveLatestPairingButton.classList.toggle("hidden", !adminEnabled);
-  }
-  if (elements.copyLoginGuideButton) {
-    elements.copyLoginGuideButton.disabled = !adminEnabled || !canOpenInstanceUi(item);
-    elements.copyLoginGuideButton.classList.toggle("hidden", !adminEnabled);
-  }
-  renderMetaGrid(item);
-  renderPairingSummary();
-  renderProbeGrid(item);
-  renderUsageSummary(item);
-  elements.detailEmpty.classList.add("hidden");
-  elements.detailContent.classList.remove("hidden");
-  updateAdminModeUi();
-};
-
-enableAdminMode = function () {
-  return (async () => {
-    if (!state.adminModeAvailable) {
-      pushStatus("error", "Admin mode unavailable", "Server admin mode is not enabled.");
-      return;
-    }
-    const token = elements.adminTokenInput.value.trim();
-    if (!token) {
-      pushStatus("error", "Admin mode unavailable", "Admin token is required.");
-      return;
-    }
-    await fetchJson("/api/admin/validate", {
-      adminAuth: false,
-      headers: { "X-Shared-Console-Admin-Token": token },
-    });
-    state.adminToken = token;
-    sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
-    updateAdminModeUi();
-    await loadInstances({ preserveSelection: true });
-    pushStatus("success", "Admin mode enabled", "Global settings and instance tokens are now available.");
-  })();
-};
-
-clearAdminMode = function () {
-  state.adminToken = "";
-  sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-  elements.adminTokenInput.value = "";
-  resetPairingState();
-  state.modelChannelSettings = null;
-  state.modelChannelSettingsText = "";
-  state.modelChannelEditorDirty = false;
-  updateAdminModeUi();
-  renderAll();
-  void loadInstances({ preserveSelection: true });
-  pushStatus("info", "已退出管理员模式");
-};
-
 function handleModelChannelsSubmit(event) {
-  return (async () => {
-    event.preventDefault();
-    if (!isAdminModeEnabled()) {
-      pushStatus("error", "保存失败", "请先进入管理员模式。");
-      return;
-    }
-    setBusy(true);
-    try {
-      const settings = buildModelChannelSettingsDraft();
-      const payload = await fetchJson("/api/model-channels", {
-        method: "PUT",
-        adminAuth: true,
-        body: JSON.stringify({
-          settings,
-          autoUnassignRemovedChannels: Boolean(
-            elements.autoUnassignRemovedModelChannelsCheckbox?.checked,
-          ),
-        }),
-      });
-      state.modelChannelCatalog = ensureModelChannelCatalogShape(payload?.catalog);
-      state.modelChannelSettings = normalizeModelChannelSettingsForEditor(payload?.settings ?? settings);
-      state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
-      state.modelChannelEditorDirty = false;
-      renderAll();
-      pushStatus(
-        "success",
-        "全局模型渠道已保存",
-        formatModelChannelSaveDetail(payload),
-      );
-      await loadInstances({ preserveSelection: true });
-    } catch (error) {
-      const detail = String(error?.message || "");
-      const hint = detail.includes("Cannot remove channels that are still assigned to instances")
-        ? `${detail} 可启用自动解除映射，或先手动清空对应实例的渠道映射。`
-        : detail;
-      pushStatus("error", "全局模型渠道保存失败", hint);
-      updateConnectionNote(`保存失败：${error.message}`, true);
-    } finally {
-      setBusy(false);
-    }
-  })();
+  return handleModelChannelsSubmitSection({
+    event,
+    isAdminModeEnabled,
+    pushStatus,
+    setBusy,
+    buildModelChannelSettingsDraft,
+    fetchJson,
+    elements,
+    state,
+    ensureModelChannelCatalogShape,
+    normalizeModelChannelSettingsForEditor,
+    renderAll,
+    formatModelChannelSaveDetail,
+    loadInstances,
+    updateConnectionNote,
+  });
 }
 
 function handleModelChannelGenerateSubmit() {
-  return (async () => {
-    if (!isAdminModeEnabled()) {
-      pushStatus("error", "生成失败", "请先进入管理员模式。");
-      return;
-    }
-    setBusy(true);
-    try {
-      const baseSettings = buildModelChannelGeneratorBaseSettings();
-      const cardGenerators = collectBatchCardModelChannelGenerators();
-      const batchRaw = elements.modelChannelGenerateBatchTextarea?.value?.trim() || "";
-      let nextSettings = baseSettings;
-      const generatedChannelIds = [];
-      const generatedGroupIds = [];
-
-      if (cardGenerators.length > 0 || batchRaw) {
-        const generators =
-          cardGenerators.length > 0 ? cardGenerators : parseBatchModelChannelGenerators(batchRaw);
-        for (const generator of generators) {
-          const response = await fetchJson("/api/model-channels/generate", {
-            method: "POST",
-            adminAuth: true,
-            body: JSON.stringify({
-              settings: nextSettings,
-              generator,
-            }),
-          });
-          nextSettings = normalizeModelChannelSettingsForEditor(response?.settings ?? nextSettings);
-          const channelIds = Array.isArray(response?.meta?.generatedChannelIds)
-            ? response.meta.generatedChannelIds
-            : [];
-          const groupId = String(response?.meta?.generatedGroupId || "").trim();
-          generatedChannelIds.push(...channelIds);
-          if (groupId) {
-            generatedGroupIds.push(groupId);
-          }
-        }
-      } else {
-        const payload = buildSingleModelChannelGeneratorPayload(baseSettings);
-        const response = await fetchJson("/api/model-channels/generate", {
-          method: "POST",
-          adminAuth: true,
-          body: JSON.stringify(payload),
-        });
-        nextSettings = normalizeModelChannelSettingsForEditor(response?.settings ?? payload.settings);
-        const channelIds = Array.isArray(response?.meta?.generatedChannelIds)
-          ? response.meta.generatedChannelIds
-          : [];
-        const groupId = String(response?.meta?.generatedGroupId || "").trim();
-        generatedChannelIds.push(...channelIds);
-        if (groupId) {
-          generatedGroupIds.push(groupId);
-        }
-      }
-
-      state.modelChannelSettings = nextSettings;
-      state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
-      if (elements.modelChannelsTextarea) {
-        elements.modelChannelsTextarea.value = state.modelChannelSettingsText;
-      }
-      state.modelChannelEditorDirty = true;
-      renderAll();
-      const detailParts = [];
-      if (generatedChannelIds.length > 0) {
-        detailParts.push(`已生成渠道：${generatedChannelIds.join(", ")}`);
-      }
-      if (generatedGroupIds.length > 0) {
-        detailParts.push(`已生成轮询组：${generatedGroupIds.join(", ")}`);
-      }
-      detailParts.push("JSON 草稿已更新，点击保存即可持久化。");
-      pushStatus("success", "模型渠道 JSON 草稿已生成", detailParts.join(" "));
-    } catch (error) {
-      pushStatus("error", "模型渠道生成失败", error.message);
-      updateConnectionNote(`生成失败：${error.message}`, true);
-    } finally {
-      setBusy(false);
-    }
-  })();
+  return handleModelChannelGenerateSubmitSection({
+    isAdminModeEnabled,
+    pushStatus,
+    setBusy,
+    buildModelChannelGeneratorBaseSettings,
+    collectBatchCardModelChannelGenerators,
+    elements,
+    parseBatchModelChannelGenerators,
+    fetchJson,
+    normalizeModelChannelSettingsForEditor,
+    buildSingleModelChannelGeneratorPayload,
+    state,
+    renderAll,
+    updateConnectionNote,
+  });
 }
 
 function handleDetailModelChannelSubmit(event) {
-  return (async () => {
-    event.preventDefault();
-    const modelChannelId = elements.detailModelChannelSelect?.value?.trim() || null;
-    await updateSelectedInstanceModelChannel(modelChannelId);
-  })();
+  return handleDetailModelChannelSubmitSection({
+    event,
+    elements,
+    updateSelectedInstanceModelChannel,
+  });
 }
 
 function bindModelChannelEvents() {
-  elements.modelChannelsForm?.addEventListener("submit", (event) => {
-    void handleModelChannelsSubmit(event);
-  });
-  elements.addModelChannelGenerateCardButton?.addEventListener("click", (event) => {
-    event.preventDefault();
-    const card = appendModelChannelGenerateCard(buildModelChannelGenerateCardDefaultValues());
-    card?.querySelector('[data-field="channelNamePrefix"]')?.focus();
-  });
-  elements.modelChannelGenerateCards?.addEventListener("click", (event) => {
-    if (!(event.target instanceof Element)) {
-      return;
-    }
-    const actionButton = event.target.closest("[data-action]");
-    if (!actionButton) {
-      return;
-    }
-    const card = actionButton.closest(".generator-card");
-    if (!card) {
-      return;
-    }
-    const action = actionButton.getAttribute("data-action");
-    if (action === "remove-model-channel-generate-card") {
-      card.remove();
-      ensureModelChannelGenerateCardsInitialized();
-      renumberModelChannelGenerateCards();
-      return;
-    }
-    if (action === "duplicate-model-channel-generate-card") {
-      const duplicate = appendModelChannelGenerateCard({
-        channelNamePrefix: readModelChannelGenerateCardField(card, "channelNamePrefix"),
-        channelIdPrefix: readModelChannelGenerateCardField(card, "channelIdPrefix"),
-        baseUrl: readModelChannelGenerateCardField(card, "baseUrl"),
-        api: readModelChannelGenerateCardField(card, "api"),
-        modelIds: readModelChannelGenerateCardField(card, "modelIds"),
-        apiKeys: readModelChannelGenerateCardField(card, "apiKeys"),
-      });
-      duplicate?.querySelector('[data-field="channelNamePrefix"]')?.focus();
-      return;
-    }
-  });
-  elements.modelChannelGenerateCards?.addEventListener("input", () => {
-    renumberModelChannelGenerateCards();
-  });
-  elements.importModelChannelBatchButton?.addEventListener("click", () => {
-    const raw = elements.modelChannelGenerateBatchTextarea?.value || "";
-    if (!raw.trim()) {
-      pushStatus("error", "导入失败", "请先填写兼容文本导入内容。");
-      return;
-    }
-    try {
-      const count = importBatchModelChannelGeneratorsAsCards(raw);
-      pushStatus("success", "已导入批量定义", `新增 ${count} 张卡片。`);
-    } catch (error) {
-      pushStatus("error", "导入失败", error.message);
-    }
-  });
-  elements.clearModelChannelCardsButton?.addEventListener("click", () => {
-    clearModelChannelGenerateCards({ keepOneBlank: true });
-    pushStatus("info", "已清空卡片", "保留一张空白卡片方便继续录入。");
-  });
-  elements.modelChannelsTextarea?.addEventListener("input", () => {
-    state.modelChannelEditorDirty = true;
-  });
-  elements.userModelConfigCheckbox?.addEventListener("change", () => {
-    state.modelChannelEditorDirty = true;
-  });
-  elements.generateModelChannelsButton?.addEventListener("click", () => {
-    void handleModelChannelGenerateSubmit();
-  });
-  elements.reloadModelChannelsButton?.addEventListener("click", () => {
-    void loadModelChannelConfig({ announce: true })
-      .then(() => renderAll())
-      .catch((error) => {
-        pushStatus("error", "重新加载失败", error.message);
-      });
-  });
-  elements.detailModelChannelForm?.addEventListener("submit", (event) => {
-    void handleDetailModelChannelSubmit(event);
-  });
-  elements.clearDetailModelChannelButton?.addEventListener("click", () => {
-    if (elements.detailModelChannelSelect) {
-      elements.detailModelChannelSelect.value = "";
-    }
-    void updateSelectedInstanceModelChannel(null);
+  return bindModelChannelEventsSection({
+    elements,
+    handleModelChannelsSubmit,
+    appendModelChannelGenerateCard,
+    buildModelChannelGenerateCardDefaultValues,
+    readModelChannelGenerateCardField,
+    ensureModelChannelGenerateCardsInitialized,
+    renumberModelChannelGenerateCards,
+    pushStatus,
+    importBatchModelChannelGeneratorsAsCards,
+    clearModelChannelGenerateCards,
+    state,
+    handleModelChannelGenerateSubmit,
+    loadModelChannelConfig,
+    renderAll,
+    handleDetailModelChannelSubmit,
+    updateSelectedInstanceModelChannel,
   });
 }
 

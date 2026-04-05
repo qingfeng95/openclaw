@@ -8,7 +8,7 @@ const outDir = path.resolve(here, "../../dist/shared-console");
 await fs.rm(outDir, { recursive: true, force: true });
 await fs.mkdir(outDir, { recursive: true });
 
-for (const fileName of ["index.html", "styles.css", "app.js", "README.md"]) {
+for (const fileName of ["index.html", "styles.css", "app.js", "instance-detail.js", "instance-requests.js", "instance-list-load.js", "model-channel-generator.js", "model-channel-panel.js", "detail-panel.js", "detail-render.js", "pairing-render.js", "shared-console-core.js", "shared-console-utils.js", "README.md"]) {
   await fs.copyFile(path.join(here, fileName), path.join(outDir, fileName));
 }
 

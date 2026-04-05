@@ -324,7 +324,195 @@ describe("shared console api", () => {
     });
   });
 
-  it("creates instances with a mapped model channel and writes the resolved config", async () => {
+  it("returns core instance detail without probe by default and serves diagnostics separately", async () => {
+    await withTempInstancesRoot(async (root) => {
+      await writeInstance(root, {
+        id: "alpha",
+        name: "Alpha",
+        port: 19111,
+        runtimeKind: "container",
+        containerName: "crewclaw-alpha",
+        containerId: "cid-alpha",
+      });
+      await fs.writeFile(path.join(root, "alpha", "run", "gateway.pid"), "4242\n", "utf8");
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        runDockerCommand: async (invocation) => {
+          const url = invocation.args.at(-2) ?? "";
+          if (url.endsWith("/healthz")) {
+            return { exitCode: 0, stdout: JSON.stringify({ ok: true }), stderr: "" };
+          }
+          if (url.endsWith("/readyz")) {
+            return { exitCode: 0, stdout: JSON.stringify({ ready: true }), stderr: "" };
+          }
+          if (url.endsWith("/version")) {
+            return { exitCode: 0, stdout: JSON.stringify({ version: "2026.4.4" }), stderr: "" };
+          }
+          if (url.endsWith("/shared/usage/summary")) {
+            return { exitCode: 0, stdout: JSON.stringify({ totalCount: 3 }), stderr: "" };
+          }
+          return { exitCode: 1, stdout: "", stderr: `unexpected url: ${url}` };
+        },
+      });
+
+      try {
+        const detailResponse = await fetch(`${baseUrl}/api/instances/alpha`);
+        expect(detailResponse.status).toBe(200);
+        const detailPayload = await detailResponse.json();
+        expect(detailPayload.ok).toBe(true);
+        expect(detailPayload.item.id).toBe("alpha");
+        expect(detailPayload.item.probe).toBeNull();
+
+        const diagnosticsResponse = await fetch(`${baseUrl}/api/instances/alpha/diagnostics`);
+        expect(diagnosticsResponse.status).toBe(200);
+        const diagnosticsPayload = await diagnosticsResponse.json();
+        expect(diagnosticsPayload).toMatchObject({
+          ok: true,
+          item: {
+            id: "alpha",
+            pool: "shared",
+            probe: {
+              live: true,
+              ready: true,
+              version: "2026.4.4",
+              usageSummary: {
+                totalCount: 3,
+              },
+            },
+          },
+        });
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("serves usage summary through a dedicated route", async () => {
+    await withTempInstancesRoot(async (root) => {
+      await writeInstance(root, {
+        id: "alpha",
+        name: "Alpha",
+        port: 19111,
+        runtimeKind: "container",
+        containerName: "crewclaw-alpha",
+        containerId: "cid-alpha",
+      });
+      await fs.writeFile(path.join(root, "alpha", "run", "gateway.pid"), "4242\n", "utf8");
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        runDockerCommand: async (invocation) => {
+          const url = invocation.args.at(-2) ?? "";
+          if (url.endsWith("/shared/usage/summary")) {
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({ totalCount: 9, countsByOutcome: { tool_routed_executed: 9 } }),
+              stderr: "",
+            };
+          }
+          return { exitCode: 1, stdout: "", stderr: `unexpected url: ${url}` };
+        },
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/instances/alpha/usage-summary`);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({
+          ok: true,
+          item: {
+            id: "alpha",
+            pool: "shared",
+            usageSummary: {
+              totalCount: 9,
+              countsByOutcome: {
+                tool_routed_executed: 9,
+              },
+            },
+            checkedAt: expect.any(String),
+          },
+        });
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("keeps diagnostics and usage-summary caches isolated", async () => {
+    await withTempInstancesRoot(async (root) => {
+      await writeInstance(root, {
+        id: "theta",
+        name: "Theta",
+        port: 19118,
+        runtimeKind: "container",
+        containerName: "crewclaw-theta",
+        containerId: "cid-theta",
+      });
+      await fs.writeFile(path.join(root, "theta", "run", "gateway.pid"), "5151\n", "utf8");
+
+      const dockerInvocations: string[][] = [];
+      const { server, baseUrl } = await startTestServer({
+        root,
+        runDockerCommand: async (invocation) => {
+          dockerInvocations.push(invocation.args);
+          const url = invocation.args.at(-2) ?? "";
+          if (url.endsWith("/healthz")) {
+            return { exitCode: 0, stdout: JSON.stringify({ ok: true }), stderr: "" };
+          }
+          if (url.endsWith("/readyz")) {
+            return { exitCode: 0, stdout: JSON.stringify({ ready: true }), stderr: "" };
+          }
+          if (url.endsWith("/version")) {
+            return { exitCode: 0, stdout: JSON.stringify({ version: "2026.3.24" }), stderr: "" };
+          }
+          if (url.endsWith("/shared/usage/summary")) {
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({ totalCount: 7, countsByOutcome: { tool_routed_executed: 7 } }),
+              stderr: "",
+            };
+          }
+          return { exitCode: 1, stdout: "", stderr: `unexpected url: ${url}` };
+        },
+      });
+
+      try {
+        const diagnosticsResponse = await fetch(`${baseUrl}/api/instances/theta/diagnostics`);
+        expect(diagnosticsResponse.status).toBe(200);
+        const usageResponse = await fetch(`${baseUrl}/api/instances/theta/usage-summary`);
+        expect(usageResponse.status).toBe(200);
+        const secondDiagnosticsResponse = await fetch(`${baseUrl}/api/instances/theta/diagnostics`);
+        expect(secondDiagnosticsResponse.status).toBe(200);
+        const secondUsageResponse = await fetch(`${baseUrl}/api/instances/theta/usage-summary`);
+        expect(secondUsageResponse.status).toBe(200);
+
+        const diagnosticsPayload = await diagnosticsResponse.json();
+        const usagePayload = await usageResponse.json();
+        expect(diagnosticsPayload.item.probe).toMatchObject({
+          live: true,
+          ready: true,
+          version: "2026.3.24",
+          usageSummary: {
+            totalCount: 7,
+          },
+        });
+        expect(usagePayload.item).toMatchObject({
+          usageSummary: {
+            totalCount: 7,
+          },
+        });
+
+        expect(dockerInvocations.filter((args) => (args.at(-2) ?? "").endsWith("/healthz"))).toHaveLength(1);
+        expect(dockerInvocations.filter((args) => (args.at(-2) ?? "").endsWith("/readyz"))).toHaveLength(1);
+        expect(dockerInvocations.filter((args) => (args.at(-2) ?? "").endsWith("/version"))).toHaveLength(1);
+        expect(dockerInvocations.filter((args) => (args.at(-2) ?? "").endsWith("/shared/usage/summary"))).toHaveLength(1);
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("creates instances with an assigned model channel and writes model config", async () => {
     await withTempInstancesRoot(async (root) => {
       const modelChannelsPath = path.join(root, "model-channels.json");
       await fs.writeFile(
@@ -1257,6 +1445,69 @@ describe("shared console api", () => {
         });
         expect(dockerInvocations).toHaveLength(4);
         expect(dockerInvocations.every((args) => args[0] === "exec" && args[1] === "crewclaw-theta")).toBe(true);
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("reuses cached diagnostics for repeated container diagnostics requests", async () => {
+    await withTempInstancesRoot(async (root) => {
+      await writeInstance(root, {
+        id: "theta",
+        name: "Theta",
+        port: 19118,
+        runtimeKind: "container",
+        containerName: "crewclaw-theta",
+        containerId: "cid-theta",
+      });
+      await fs.writeFile(path.join(root, "theta", "run", "gateway.pid"), "5151\n", "utf8");
+
+      const dockerInvocations: string[][] = [];
+      const { server, baseUrl } = await startTestServer({
+        root,
+        runDockerCommand: async (invocation) => {
+          dockerInvocations.push(invocation.args);
+          const url = invocation.args.at(-2) ?? "";
+          if (url.endsWith("/healthz")) {
+            return { exitCode: 0, stdout: JSON.stringify({ ok: true }), stderr: "" };
+          }
+          if (url.endsWith("/readyz")) {
+            return { exitCode: 0, stdout: JSON.stringify({ ready: true }), stderr: "" };
+          }
+          if (url.endsWith("/version")) {
+            return { exitCode: 0, stdout: JSON.stringify({ version: "2026.3.24" }), stderr: "" };
+          }
+          if (url.endsWith("/shared/usage/summary")) {
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({ totalCount: 7, countsByOutcome: { tool_routed_executed: 7 } }),
+              stderr: "",
+            };
+          }
+          return { exitCode: 1, stdout: "", stderr: `unexpected url: ${url}` };
+        },
+      });
+
+      try {
+        const firstResponse = await fetch(`${baseUrl}/api/instances/theta/diagnostics`);
+        expect(firstResponse.status).toBe(200);
+        const secondResponse = await fetch(`${baseUrl}/api/instances/theta/diagnostics`);
+        expect(secondResponse.status).toBe(200);
+
+        const firstPayload = await firstResponse.json();
+        const secondPayload = await secondResponse.json();
+        expect(firstPayload.item.probe).toMatchObject({
+          live: true,
+          ready: true,
+          version: "2026.3.24",
+        });
+        expect(secondPayload.item.probe).toMatchObject({
+          live: true,
+          ready: true,
+          version: "2026.3.24",
+        });
+        expect(dockerInvocations).toHaveLength(4);
       } finally {
         await stopServer(server);
       }

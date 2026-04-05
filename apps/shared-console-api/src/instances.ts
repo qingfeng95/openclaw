@@ -26,6 +26,12 @@ export type SharedInstanceProbe = {
   error?: string;
 };
 
+export type SharedInstanceUsageSummaryResult = {
+  checkedAt: string;
+  usageSummary: SharedUsageSummaryPayload | null;
+  error?: string;
+};
+
 export type SharedInstanceRecord = {
   id: string;
   name: string;
@@ -72,10 +78,33 @@ export type BuildSharedInstanceRecordOptions = {
   ) => Promise<unknown>;
 };
 
+export type BuildSharedInstanceDiagnosticsOptions = Omit<
+  BuildSharedInstanceRecordOptions,
+  "includeProbe"
+> & {
+  cacheTtlMs?: number;
+};
+
+export type BuildSharedInstanceUsageSummaryOptions = Omit<
+  BuildSharedInstanceRecordOptions,
+  "includeProbe"
+> & {
+  cacheTtlMs?: number;
+};
+
 type InstanceEnvRecord = Record<string, string>;
 
 const DEFAULT_PROBE_TIMEOUT_MS = 1_500;
+const DEFAULT_DIAGNOSTICS_CACHE_TTL_MS = 5_000;
 const GIT_BASH_WINDOWS_PATH = "C:\\Program Files\\Git\\bin\\bash.exe";
+const diagnosticsCache = new Map<
+  string,
+  { expiresAt: number; probe: SharedInstanceProbe }
+>();
+const usageSummaryCache = new Map<
+  string,
+  { expiresAt: number; result: SharedInstanceUsageSummaryResult }
+>();
 
 function stripWrappingQuotes(value: string): string {
   if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
@@ -194,7 +223,24 @@ async function readJsonResponse(
   }
 }
 
-async function probeSharedInstance(
+async function readInstanceProbePayload(
+  instance: SharedInstanceRecord,
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
+  endpointPath: string,
+  runContainerProbe?: BuildSharedInstanceRecordOptions["runContainerProbe"],
+): Promise<unknown> {
+  const baseUrl = `http://127.0.0.1:${instance.port}`;
+  if (instance.runtime.location === "container" && runContainerProbe) {
+    return await runContainerProbe(instance, {
+      path: endpointPath,
+      timeoutMs,
+    });
+  }
+  return await readJsonResponse(fetchImpl, `${baseUrl}${endpointPath}`, timeoutMs);
+}
+
+async function probeSharedInstanceDiagnostics(
   instance: SharedInstanceRecord,
   fetchImpl: typeof fetch,
   timeoutMs: number,
@@ -212,21 +258,10 @@ async function probeSharedInstance(
     };
   }
 
-  const baseUrl = `http://127.0.0.1:${instance.port}`;
-  const readProbe = (endpointPath: string) => {
-    if (instance.runtime.location === "container" && runContainerProbe) {
-      return runContainerProbe(instance, {
-        path: endpointPath,
-        timeoutMs,
-      });
-    }
-    return readJsonResponse(fetchImpl, `${baseUrl}${endpointPath}`, timeoutMs);
-  };
   const results = await Promise.allSettled([
-    readProbe("/healthz"),
-    readProbe("/readyz"),
-    readProbe("/version"),
-    readProbe("/shared/usage/summary"),
+    readInstanceProbePayload(instance, fetchImpl, timeoutMs, "/healthz", runContainerProbe),
+    readInstanceProbePayload(instance, fetchImpl, timeoutMs, "/readyz", runContainerProbe),
+    readInstanceProbePayload(instance, fetchImpl, timeoutMs, "/version", runContainerProbe),
   ]);
 
   const livePayload =
@@ -235,8 +270,6 @@ async function probeSharedInstance(
     results[1].status === "fulfilled" && isObject(results[1].value) ? results[1].value : null;
   const versionPayload =
     results[2].status === "fulfilled" && isObject(results[2].value) ? results[2].value : null;
-  const usagePayload =
-    results[3].status === "fulfilled" && isObject(results[3].value) ? results[3].value : null;
 
   const errors = results
     .filter((result): result is PromiseRejectedResult => result.status === "rejected")
@@ -249,9 +282,123 @@ async function probeSharedInstance(
     ready: typeof readyPayload?.["ready"] === "boolean" ? (readyPayload["ready"] as boolean) : null,
     version:
       typeof versionPayload?.["version"] === "string" ? (versionPayload["version"] as string) : null,
-    usageSummary: usagePayload as SharedUsageSummaryPayload | null,
+    usageSummary: null,
     ...(errors.length > 0 ? { error: errors.join("; ") } : {}),
   };
+}
+
+async function probeSharedInstanceUsageSummary(
+  instance: SharedInstanceRecord,
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
+  runContainerProbe?: BuildSharedInstanceRecordOptions["runContainerProbe"],
+): Promise<SharedInstanceUsageSummaryResult> {
+  const checkedAt = new Date().toISOString();
+  if (instance.process.state !== "running" || !instance.port) {
+    return {
+      checkedAt,
+      usageSummary: null,
+      error: "instance not running",
+    };
+  }
+
+  try {
+    const payload = await readInstanceProbePayload(
+      instance,
+      fetchImpl,
+      timeoutMs,
+      "/shared/usage/summary",
+      runContainerProbe,
+    );
+    return {
+      checkedAt,
+      usageSummary: isObject(payload) ? (payload as SharedUsageSummaryPayload) : null,
+    };
+  } catch (error) {
+    return {
+      checkedAt,
+      usageSummary: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function getDiagnosticsCacheKey(instance: SharedInstanceRecord): string {
+  return `${instance.paths.dir}::diagnostics`;
+}
+
+function getUsageSummaryCacheKey(instance: SharedInstanceRecord): string {
+  return `${instance.paths.dir}::usage-summary`;
+}
+
+export async function readSharedInstanceUsageSummary(
+  instance: SharedInstanceRecord,
+  options: BuildSharedInstanceUsageSummaryOptions = {},
+): Promise<SharedInstanceUsageSummaryResult> {
+  const cacheTtlMs =
+    options.cacheTtlMs == null ? DEFAULT_DIAGNOSTICS_CACHE_TTL_MS : Math.max(0, options.cacheTtlMs);
+  const cacheKey = getUsageSummaryCacheKey(instance);
+  const now = Date.now();
+  const cached = usageSummaryCache.get(cacheKey);
+  if (cacheTtlMs > 0 && cached && cached.expiresAt > now) {
+    return cached.result;
+  }
+
+  const result = await probeSharedInstanceUsageSummary(
+    instance,
+    options.fetchImpl ?? fetch,
+    options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+    options.runContainerProbe,
+  );
+
+  if (cacheTtlMs > 0) {
+    usageSummaryCache.set(cacheKey, {
+      result,
+      expiresAt: now + cacheTtlMs,
+    });
+  } else {
+    usageSummaryCache.delete(cacheKey);
+  }
+
+  return result;
+}
+
+export async function readSharedInstanceDiagnostics(
+  instance: SharedInstanceRecord,
+  options: BuildSharedInstanceDiagnosticsOptions = {},
+): Promise<SharedInstanceProbe> {
+  const cacheTtlMs =
+    options.cacheTtlMs == null ? DEFAULT_DIAGNOSTICS_CACHE_TTL_MS : Math.max(0, options.cacheTtlMs);
+  const cacheKey = getDiagnosticsCacheKey(instance);
+  const now = Date.now();
+  const cached = diagnosticsCache.get(cacheKey);
+  if (cacheTtlMs > 0 && cached && cached.expiresAt > now) {
+    return cached.probe;
+  }
+
+  const probe = await probeSharedInstanceDiagnostics(
+    instance,
+    options.fetchImpl ?? fetch,
+    options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+    options.runContainerProbe,
+  );
+  const usage = await readSharedInstanceUsageSummary(instance, options);
+  const result: SharedInstanceProbe = {
+    ...probe,
+    usageSummary: usage.usageSummary,
+    ...(!probe.error && usage.error ? { error: usage.error } : {}),
+  };
+
+  if (cacheTtlMs > 0) {
+    diagnosticsCache.set(cacheKey, {
+      probe: result,
+      expiresAt: now + cacheTtlMs,
+    });
+  } else {
+    diagnosticsCache.delete(cacheKey);
+  }
+
+  return result;
 }
 
 async function readInstanceEnvFile(filePath: string): Promise<InstanceEnvRecord> {
@@ -363,12 +510,7 @@ export async function buildSharedInstanceRecord(
     return record;
   }
 
-  record.probe = await probeSharedInstance(
-    record,
-    options.fetchImpl ?? fetch,
-    options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
-    options.runContainerProbe,
-  );
+  record.probe = await readSharedInstanceDiagnostics(record, options);
   return record;
 }
 

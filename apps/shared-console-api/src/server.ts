@@ -21,6 +21,8 @@ import {
 import {
   getSharedInstanceById,
   listSharedInstances,
+  readSharedInstanceDiagnostics,
+  readSharedInstanceUsageSummary,
   resolveSharedConsoleApiBashPath,
   resolveSharedConsoleDedicatedInstancesRoot,
   updateSharedInstanceEnvValues,
@@ -28,7 +30,9 @@ import {
   resolveSharedConsoleRepoRoot,
   updateSharedInstanceName,
   validateSharedInstanceId,
+  type BuildSharedInstanceDiagnosticsOptions,
   type BuildSharedInstanceRecordOptions,
+  type BuildSharedInstanceUsageSummaryOptions,
   type SharedInstanceRecord,
 } from "./instances.ts";
 import {
@@ -45,6 +49,7 @@ import {
 const DEFAULT_SHARED_CONSOLE_API_HOST = "127.0.0.1";
 const DEFAULT_SHARED_CONSOLE_API_PORT = 43100;
 const DEFAULT_SHARED_CONSOLE_API_PROBE_TIMEOUT_MS = 1_500;
+const DEFAULT_SHARED_CONSOLE_API_DIAGNOSTICS_CACHE_TTL_MS = 5_000;
 const SAFE_CONTAINER_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -69,6 +74,7 @@ export type SharedConsoleApiConfig = {
   modelChannelsPath: string;
   bashPath: string;
   probeTimeoutMs: number;
+  diagnosticsCacheTtlMs: number;
   adminToken: string | null;
 };
 
@@ -144,6 +150,10 @@ export function resolveSharedConsoleApiConfig(
     probeTimeoutMs: parsePositiveInteger(
       env.SHARED_CONSOLE_API_PROBE_TIMEOUT_MS,
       DEFAULT_SHARED_CONSOLE_API_PROBE_TIMEOUT_MS,
+    ),
+    diagnosticsCacheTtlMs: parsePositiveInteger(
+      env.SHARED_CONSOLE_API_DIAGNOSTICS_CACHE_TTL_MS,
+      DEFAULT_SHARED_CONSOLE_API_DIAGNOSTICS_CACHE_TTL_MS,
     ),
     adminToken: env.SHARED_CONSOLE_ADMIN_TOKEN?.trim() || null,
   };
@@ -455,6 +465,52 @@ function parseInstancePairingRoute(url: URL) {
   );
 }
 
+function parseNamedInstanceDiagnosticsRoute(
+  url: URL,
+  basePath: string,
+  pool: InstancePool,
+): { pool: InstancePool; id: string } | null {
+  const match = url.pathname.match(new RegExp(`^${basePath}/([^/]+)/diagnostics$`));
+  if (!match) {
+    return null;
+  }
+  return {
+    pool,
+    id: decodeURIComponent(match[1] ?? ""),
+  };
+}
+
+function parseInstanceDiagnosticsRoute(url: URL) {
+  return (
+    parseNamedInstanceDiagnosticsRoute(url, "/api/instances", "shared") ??
+    parseNamedInstanceDiagnosticsRoute(url, "/api/shared-instances", "shared") ??
+    parseNamedInstanceDiagnosticsRoute(url, "/api/dedicated-instances", "dedicated")
+  );
+}
+
+function parseNamedInstanceUsageSummaryRoute(
+  url: URL,
+  basePath: string,
+  pool: InstancePool,
+): { pool: InstancePool; id: string } | null {
+  const match = url.pathname.match(new RegExp(`^${basePath}/([^/]+)/usage-summary$`));
+  if (!match) {
+    return null;
+  }
+  return {
+    pool,
+    id: decodeURIComponent(match[1] ?? ""),
+  };
+}
+
+function parseInstanceUsageSummaryRoute(url: URL) {
+  return (
+    parseNamedInstanceUsageSummaryRoute(url, "/api/instances", "shared") ??
+    parseNamedInstanceUsageSummaryRoute(url, "/api/shared-instances", "shared") ??
+    parseNamedInstanceUsageSummaryRoute(url, "/api/dedicated-instances", "dedicated")
+  );
+}
+
 function parseContainerRoute(url: URL):
   | { kind: "collection" }
   | { kind: "logs"; id: string }
@@ -530,6 +586,30 @@ function resolveRecordOptions(
   };
 }
 
+function resolveDiagnosticsOptions(
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+): BuildSharedInstanceDiagnosticsOptions {
+  return {
+    fetchImpl: deps.fetchImpl,
+    probeTimeoutMs: config.probeTimeoutMs,
+    cacheTtlMs: config.diagnosticsCacheTtlMs,
+    runContainerProbe: resolveRecordOptions(config, deps, true).runContainerProbe,
+  };
+}
+
+function resolveUsageSummaryOptions(
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+): BuildSharedInstanceUsageSummaryOptions {
+  return {
+    fetchImpl: deps.fetchImpl,
+    probeTimeoutMs: config.probeTimeoutMs,
+    cacheTtlMs: config.diagnosticsCacheTtlMs,
+    runContainerProbe: resolveRecordOptions(config, deps, true).runContainerProbe,
+  };
+}
+
 function ensureInstanceId(id: string): string {
   if (!validateSharedInstanceId(id)) {
     throw new HttpError(400, `Invalid instance id: ${id}`);
@@ -554,6 +634,53 @@ async function ensureInstance(
   }
   return instance;
 }
+
+async function handleInstanceDiagnosticsRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+  route: { pool: InstancePool; id: string },
+): Promise<void> {
+  if ((req.method ?? "GET").toUpperCase() !== "GET") {
+    throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
+  }
+  const item = await ensureInstance(config, deps, route.pool, route.id, false);
+  const probe = await readSharedInstanceDiagnostics(item, resolveDiagnosticsOptions(config, deps));
+  sendJson(res, 200, {
+    ok: true,
+    item: {
+      id: item.id,
+      pool: route.pool,
+      probe,
+    },
+  });
+}
+
+async function handleInstanceUsageSummaryRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+  route: { pool: InstancePool; id: string },
+): Promise<void> {
+  if ((req.method ?? "GET").toUpperCase() !== "GET") {
+    throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
+  }
+  const item = await ensureInstance(config, deps, route.pool, route.id, false);
+  const result = await readSharedInstanceUsageSummary(item, resolveUsageSummaryOptions(config, deps));
+  sendJson(res, 200, {
+    ok: true,
+    item: {
+      id: item.id,
+      pool: route.pool,
+      usageSummary: result.usageSummary,
+      checkedAt: result.checkedAt,
+      ...(result.error ? { error: result.error } : {}),
+    },
+  });
+}
+
 
 async function resolveContainerBridgeIp(
   deps: SharedConsoleApiDeps,
@@ -1454,6 +1581,18 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
           return;
         }
 
+        const instanceDiagnosticsRoute = parseInstanceDiagnosticsRoute(url);
+        if (instanceDiagnosticsRoute) {
+          await handleInstanceDiagnosticsRequest(req, res, config, deps, instanceDiagnosticsRoute);
+          return;
+        }
+
+        const instanceUsageSummaryRoute = parseInstanceUsageSummaryRoute(url);
+        if (instanceUsageSummaryRoute) {
+          await handleInstanceUsageSummaryRequest(req, res, config, deps, instanceUsageSummaryRoute);
+          return;
+        }
+
         const containerRoute = parseContainerRoute(url);
         if (containerRoute) {
           if (containerRoute.kind === "collection") {
@@ -1529,7 +1668,7 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
 
         if (route.kind === "item") {
           if (req.method === "GET") {
-            const includeProbe = readBooleanQuery(url, "includeProbe", true);
+            const includeProbe = readBooleanQuery(url, "includeProbe", false);
             const item = await ensureInstance(config, deps, route.pool, route.id, includeProbe);
             sendJson(res, 200, {
               ok: true,

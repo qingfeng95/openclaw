@@ -16,20 +16,22 @@ import {
 } from "./instance-requests.js";
 import { loadInstancesSection } from "./instance-list-load.js";
 import {
-  appendModelChannelGenerateCardSection,
-  buildModelChannelGenerateCardDefaultValuesSection,
+  appendMultiUrlModelChannelRowSection,
+  applyGeneratedMultiUrlRoundRobinGroupSection,
   buildModelChannelGeneratorSharedOptionsSection,
+  buildMultiUrlModelChannelGenerationPlanSection,
   buildSingleModelChannelGeneratorPayloadSection,
-  clearModelChannelGenerateCardsSection,
-  collectBatchCardModelChannelGeneratorsSection,
-  ensureModelChannelGenerateCardsInitializedSection,
-  getModelChannelGenerateCardsSection,
-  importBatchModelChannelGeneratorsAsCardsSection,
-  parseBatchModelChannelGeneratorsSection,
-  readModelChannelGenerateCardFieldSection,
-  renumberModelChannelGenerateCardsSection,
-  setModelChannelGenerateCardsDisabledSection,
+  clearMultiUrlModelChannelRowsSection,
+  getModelChannelGeneratorModeSection,
+  getMultiUrlModelChannelRowsSection,
+  hydrateModelChannelGeneratorEditorFromSettingsSection,
+  importBatchModelChannelGeneratorsAsRowsSection,
+  readMultiUrlModelChannelRowFieldSection,
+  renumberMultiUrlModelChannelRowsSection,
+  setModelChannelGenerateRowsDisabledSection,
+  setModelChannelGeneratorModeSection,
   splitModelChannelGeneratorListSection,
+  syncMultiUrlModelChannelRowsEmptyStateSection,
 } from "./model-channel-generator.js";
 import {
   bindModelChannelEventsSection,
@@ -65,13 +67,13 @@ import {
   defaultModelChannelSettingsSection,
   describeContainerActionSection,
   describeInstanceActionSection,
+  ensureModelChannelCatalogShapeSection,
   explainHotspotValueSection,
   explainOutcomeSection,
   explainRouteTypeSection,
   explainRuleIdSection,
   explainToolActionSection,
   explainToolNameSection,
-  ensureModelChannelCatalogShapeSection,
   instanceApiBaseSection,
   instanceRuntimeChipLabelSection,
   instanceRuntimeDescriptionSection,
@@ -141,6 +143,7 @@ const state = {
   modelChannelSettings: null,
   modelChannelSettingsText: "",
   modelChannelEditorDirty: false,
+  modelChannelEditorSyncSourceKey: null,
   filter: "",
   activeTab: "overview",
   busy: false,
@@ -191,17 +194,25 @@ const elements = {
   modelChannelsPanel: document.querySelector("#model-channels-panel"),
   modelChannelsForm: document.querySelector("#model-channels-form"),
   modelChannelsTextarea: document.querySelector("#model-channels-textarea"),
-  modelChannelGenerateBaseUrlInput: document.querySelector("#model-channel-generate-base-url"),
-  modelChannelGenerateApiInput: document.querySelector("#model-channel-generate-api"),
-  modelChannelGenerateIdPrefixInput: document.querySelector("#model-channel-generate-id-prefix"),
-  modelChannelGenerateNamePrefixInput: document.querySelector("#model-channel-generate-name-prefix"),
-  modelChannelGenerateApiKeysTextarea: document.querySelector("#model-channel-generate-api-keys"),
-  modelChannelGenerateModelsTextarea: document.querySelector("#model-channel-generate-models"),
+  modelChannelGenerateModeSingleInput: document.querySelector("#model-channel-generate-mode-single"),
+  modelChannelGenerateModeMultiInput: document.querySelector("#model-channel-generate-mode-multi"),
+  modelChannelSinglePanel: document.querySelector("#model-channel-single-panel"),
+  modelChannelMultiPanel: document.querySelector("#model-channel-multi-panel"),
+  modelChannelSingleBaseUrlInput: document.querySelector("#model-channel-single-base-url"),
+  modelChannelSingleApiInput: document.querySelector("#model-channel-single-api"),
+  modelChannelSingleIdPrefixInput: document.querySelector("#model-channel-single-id-prefix"),
+  modelChannelSingleNamePrefixInput: document.querySelector("#model-channel-single-name-prefix"),
+  modelChannelSingleApiKeysTextarea: document.querySelector("#model-channel-single-api-keys"),
+  modelChannelSingleModelsTextarea: document.querySelector("#model-channel-single-models"),
+  modelChannelMultiModelsTextarea: document.querySelector("#model-channel-multi-models"),
+  modelChannelMultiGroupIdInput: document.querySelector("#model-channel-multi-group-id"),
+  modelChannelMultiGroupNameInput: document.querySelector("#model-channel-multi-group-name"),
   modelChannelGenerateBatchTextarea: document.querySelector("#model-channel-generate-batch-textarea"),
-  addModelChannelGenerateCardButton: document.querySelector("#add-model-channel-generate-card-button"),
+  addModelChannelMultiRowButton: document.querySelector("#add-model-channel-multi-row-button"),
   importModelChannelBatchButton: document.querySelector("#import-model-channel-batch-button"),
-  clearModelChannelCardsButton: document.querySelector("#clear-model-channel-cards-button"),
-  modelChannelGenerateCards: document.querySelector("#model-channel-generate-cards"),
+  clearModelChannelMultiRowsButton: document.querySelector("#clear-model-channel-multi-rows-button"),
+  modelChannelMultiRows: document.querySelector("#model-channel-multi-rows"),
+  modelChannelMultiRowsEmptyState: document.querySelector("#model-channel-multi-rows-empty-state"),
   modelChannelGenerateReasoningCheckbox: document.querySelector("#model-channel-generate-reasoning"),
   modelChannelGenerateImageInputCheckbox: document.querySelector("#model-channel-generate-image-input"),
   modelChannelGenerateRoundRobinCheckbox: document.querySelector("#model-channel-generate-round-robin"),
@@ -825,11 +836,11 @@ function renderContainers() {
                   这个容器不是值班台创建的预备容器，当前也没有被任何实例绑定，所以这里只展示状态，不提供容器级操作。
                 </div>
               `
-          : `
-              <div class="container-card-note">
-                这个容器目前只是实例侧声明，Docker 里还没有发现对应实体，所以暂时不能直接操作。
-              </div>
-            `;
+            : `
+                <div class="container-card-note">
+                  这个容器目前只是实例侧声明，Docker 里还没有发现对应实体，所以暂时不能直接操作。
+                </div>
+              `;
       return `
         <article class="container-card">
           <div class="container-card-title">
@@ -894,49 +905,24 @@ function renderModelChannelSelects() {
   renderModelChannelSelect(elements.detailModelChannelSelect, state.selectedItem?.modelChannelId || "");
 }
 
+function syncModelChannelGeneratorEditorFromState() {
+  const sourceSettings = isAdminModeEnabled() ? state.modelChannelSettings : null;
+  const sourceKey = sourceSettings ? JSON.stringify(sourceSettings) : "";
+  if (state.modelChannelEditorSyncSourceKey === sourceKey) {
+    return;
+  }
+  hydrateModelChannelGeneratorEditorFromSettings(sourceSettings);
+  state.modelChannelEditorSyncSourceKey = sourceKey;
+}
+
 function renderModelChannelsPanel() {
   return renderModelChannelsPanelSection({
     state,
     elements,
     isAdminModeEnabled,
     defaultModelChannelSettings,
-    ensureModelChannelGenerateCardsInitialized,
-    setModelChannelGenerateCardsDisabled,
+    setModelChannelGenerateRowsDisabled,
   });
-  if (
-    !elements.modelChannelsPanel ||
-    !elements.modelChannelsTextarea ||
-    !elements.userModelConfigCheckbox ||
-    !elements.reloadModelChannelsButton ||
-    !elements.saveModelChannelsButton
-  ) {
-    return;
-  }
-  const adminEnabled = isAdminModeEnabled();
-  const settings = state.modelChannelSettings || defaultModelChannelSettings();
-  elements.userModelConfigCheckbox.checked = Boolean(
-    state.modelChannelSettings?.userCanConfigureModels ?? state.modelChannelCatalog.userCanConfigureModels,
-  );
-  if (!elements.modelChannelsTextarea.value || adminEnabled) {
-    elements.modelChannelsTextarea.value =
-      state.modelChannelSettingsText || JSON.stringify(settings, null, 2);
-  }
-  elements.userModelConfigCheckbox.disabled = !adminEnabled;
-  elements.modelChannelsTextarea.disabled = !adminEnabled;
-  elements.reloadModelChannelsButton.disabled = !adminEnabled;
-  elements.saveModelChannelsButton.disabled = !adminEnabled;
-  if (!state.adminModeAvailable) {
-    elements.modelChannelsPanel.textContent = "当前服务端未启用管理员模式，无法管理全局模型渠道。";
-    return;
-  }
-  if (!adminEnabled) {
-    elements.modelChannelsPanel.textContent =
-      "进入管理员模式后，可统一维护多个模型渠道，并决定用户是否允许自己配置模型。";
-    return;
-  }
-  elements.modelChannelsPanel.textContent = `当前共 ${state.modelChannelCatalog.channels.length} 个渠道；用户自配模型：${
-    state.modelChannelCatalog.userCanConfigureModels ? "开启" : "关闭"
-  }。保存全局渠道后，已映射实例的配置文件会同步更新；运行中的实例需要重启后生效。`;
 }
 
 function syncCreateFormConstraints() {
@@ -1080,42 +1066,6 @@ function renderMetaGrid(item) {
     escapeHtml,
     formatMaybe,
   });
-  const entries = [
-    ["实例类型", instanceScopeLabel(state.selectedScope)],
-    ["实例 ID", item.id],
-    ["显示名称", item.name],
-    ["运行状态", item.process?.state === "running" ? "运行中" : "未运行"],
-    ["运行位置", instanceRuntimeLocation(item) === "container" ? "容器中运行" : "宿主机运行"],
-    [
-      "所属容器",
-      instanceRuntimeLocation(item) === "container"
-        ? item.runtime?.containerName || "容器名称未写入"
-        : "当前未放入容器",
-    ],
-    ["当前进程 PID", item.process?.pid],
-    ["监听地址", item.bind],
-    ["端口", item.port],
-    ["运行档案名", item.profile],
-    ["实例模板", item.template],
-    ["配置文件", item.paths?.configPath],
-    ["运行数据目录", item.paths?.stateDir],
-    ["日志目录", item.paths?.logDir],
-    ["创建时间", formatDateTime(item.timestamps?.createdAt)],
-    ["最近更新时间", formatDateTime(item.timestamps?.updatedAt)],
-    ["当前版本", item.probe?.version],
-    ["运行说明", instanceRuntimeDescription(item)],
-  ];
-
-  elements.detailMeta.innerHTML = entries
-    .map(
-      ([label, value]) => `
-        <div class="meta-item">
-          <span class="meta-label">${escapeHtml(label)}</span>
-          <div class="meta-value"><code>${escapeHtml(formatMaybe(value))}</code></div>
-        </div>
-      `,
-    )
-    .join("");
 }
 
 function buildDiagnosticsNote(item) {
@@ -1221,7 +1171,6 @@ function renderDetailContentSections(item) {
   });
 }
 
-
 function renderDetail() {
   return renderDetailSection({
     state,
@@ -1244,6 +1193,7 @@ function renderAll() {
   renderContainers();
   renderContainerNameOptions();
   renderModelChannelSelects();
+  syncModelChannelGeneratorEditorFromState();
   renderModelChannelsPanel();
   renderContainerLogs();
   renderInstancesList();
@@ -1958,52 +1908,60 @@ function buildModelChannelGeneratorSharedOptions() {
   return buildModelChannelGeneratorSharedOptionsSection(elements);
 }
 
+function getModelChannelGeneratorMode() {
+  return getModelChannelGeneratorModeSection(elements);
+}
+
+function setModelChannelGenerateMode(mode) {
+  return setModelChannelGeneratorModeSection(elements, mode);
+}
+
 function buildSingleModelChannelGeneratorPayload(baseSettings) {
   return buildSingleModelChannelGeneratorPayloadSection(baseSettings, elements);
 }
 
-function getModelChannelGenerateCards() {
-  return getModelChannelGenerateCardsSection(elements);
+function getMultiUrlModelChannelRows() {
+  return getMultiUrlModelChannelRowsSection(elements);
 }
 
-function renumberModelChannelGenerateCards() {
-  return renumberModelChannelGenerateCardsSection(elements);
+function renumberMultiUrlModelChannelRows() {
+  return renumberMultiUrlModelChannelRowsSection(elements);
 }
 
-function buildModelChannelGenerateCardDefaultValues() {
-  return buildModelChannelGenerateCardDefaultValuesSection(elements);
+function appendMultiUrlModelChannelRow(values = {}) {
+  return appendMultiUrlModelChannelRowSection(elements, document, escapeHtml, values);
 }
 
-function appendModelChannelGenerateCard(values = {}) {
-  return appendModelChannelGenerateCardSection(elements, document, escapeHtml, values);
+function clearMultiUrlModelChannelRows() {
+  return clearMultiUrlModelChannelRowsSection(elements);
 }
 
-function clearModelChannelGenerateCards({ keepOneBlank = true } = {}) {
-  return clearModelChannelGenerateCardsSection(elements, document, escapeHtml, { keepOneBlank });
+function syncMultiUrlModelChannelRowsEmptyState() {
+  return syncMultiUrlModelChannelRowsEmptyStateSection(elements);
 }
 
-function ensureModelChannelGenerateCardsInitialized() {
-  return ensureModelChannelGenerateCardsInitializedSection(elements, document, escapeHtml);
+function readMultiUrlModelChannelRowField(row, field) {
+  return readMultiUrlModelChannelRowFieldSection(row, field);
 }
 
-function readModelChannelGenerateCardField(card, field) {
-  return readModelChannelGenerateCardFieldSection(card, field);
+function buildMultiUrlModelChannelGenerationPlan() {
+  return buildMultiUrlModelChannelGenerationPlanSection(elements);
 }
 
-function collectBatchCardModelChannelGenerators() {
-  return collectBatchCardModelChannelGeneratorsSection(elements);
+function setModelChannelGenerateRowsDisabled(disabled) {
+  return setModelChannelGenerateRowsDisabledSection(elements, disabled);
 }
 
-function setModelChannelGenerateCardsDisabled(disabled) {
-  return setModelChannelGenerateCardsDisabledSection(elements, disabled);
+function importBatchModelChannelGeneratorsAsRows(raw) {
+  return importBatchModelChannelGeneratorsAsRowsSection(elements, document, escapeHtml, raw);
 }
 
-function parseBatchModelChannelGenerators(raw) {
-  return parseBatchModelChannelGeneratorsSection(raw, elements);
+function hydrateModelChannelGeneratorEditorFromSettings(settings) {
+  return hydrateModelChannelGeneratorEditorFromSettingsSection(elements, document, escapeHtml, settings);
 }
 
-function importBatchModelChannelGeneratorsAsCards(raw) {
-  return importBatchModelChannelGeneratorsAsCardsSection(elements, document, escapeHtml, raw);
+function applyGeneratedMultiUrlRoundRobinGroup(settings, generatedChannelIds, group) {
+  return applyGeneratedMultiUrlRoundRobinGroupSection(settings, generatedChannelIds, group);
 }
 
 function formatModelChannelSaveDetail(payload) {
@@ -2061,12 +2019,13 @@ function handleModelChannelGenerateSubmit() {
     pushStatus,
     setBusy,
     buildModelChannelGeneratorBaseSettings,
-    collectBatchCardModelChannelGenerators,
-    elements,
-    parseBatchModelChannelGenerators,
+    getModelChannelGeneratorMode,
+    buildMultiUrlModelChannelGenerationPlan,
     fetchJson,
     normalizeModelChannelSettingsForEditor,
     buildSingleModelChannelGeneratorPayload,
+    applyGeneratedMultiUrlRoundRobinGroup,
+    elements,
     state,
     renderAll,
     updateConnectionNote,
@@ -2085,20 +2044,20 @@ function bindModelChannelEvents() {
   return bindModelChannelEventsSection({
     elements,
     handleModelChannelsSubmit,
-    appendModelChannelGenerateCard,
-    buildModelChannelGenerateCardDefaultValues,
-    readModelChannelGenerateCardField,
-    ensureModelChannelGenerateCardsInitialized,
-    renumberModelChannelGenerateCards,
+    appendMultiUrlModelChannelRow,
+    readMultiUrlModelChannelRowField,
+    renumberMultiUrlModelChannelRows,
     pushStatus,
-    importBatchModelChannelGeneratorsAsCards,
-    clearModelChannelGenerateCards,
+    importBatchModelChannelGeneratorsAsRows,
+    clearMultiUrlModelChannelRows,
+    setModelChannelGenerateMode,
     state,
     handleModelChannelGenerateSubmit,
     loadModelChannelConfig,
     renderAll,
     handleDetailModelChannelSubmit,
     updateSelectedInstanceModelChannel,
+    isAdminModeEnabled,
   });
 }
 
@@ -2116,7 +2075,8 @@ async function init() {
   bindEvents();
   setActiveTab(state.activeTab, { persist: false });
   bindModelChannelEvents();
-  ensureModelChannelGenerateCardsInitialized();
+  setModelChannelGenerateMode(getModelChannelGeneratorMode());
+  syncMultiUrlModelChannelRowsEmptyState();
   syncCreateFormConstraints();
   updateAdminModeUi();
   configureAutoRefresh(elements.autoRefreshCheckbox.checked);

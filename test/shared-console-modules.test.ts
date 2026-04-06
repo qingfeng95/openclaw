@@ -2,19 +2,24 @@ import { describe, expect, it, vi } from "vitest";
 import { JSDOM } from "jsdom";
 
 import {
-  appendModelChannelGenerateCardSection,
-  buildModelChannelGenerateCardDefaultValuesSection,
-  collectBatchCardModelChannelGeneratorsSection,
-  readModelChannelGenerateCardFieldSection,
-  importBatchModelChannelGeneratorsAsCardsSection,
-  renumberModelChannelGenerateCardsSection,
-  clearModelChannelGenerateCardsSection,
-  ensureModelChannelGenerateCardsInitializedSection,
+  appendMultiUrlModelChannelRowSection,
+  applyGeneratedMultiUrlRoundRobinGroupSection,
+  buildMultiUrlModelChannelGenerationPlanSection,
+  buildSingleModelChannelGeneratorPayloadSection,
+  clearMultiUrlModelChannelRowsSection,
+  getModelChannelGeneratorModeSection,
+  hydrateModelChannelGeneratorEditorFromSettingsSection,
+  importBatchModelChannelGeneratorsAsRowsSection,
+  normalizeModelChannelGeneratorApiValueSection,
+  readMultiUrlModelChannelRowFieldSection,
+  renumberMultiUrlModelChannelRowsSection,
+  setModelChannelGeneratorModeSection,
   splitModelChannelGeneratorListSection,
 } from "../apps/shared-console/model-channel-generator.js";
 import {
   bindModelChannelEventsSection,
   handleDetailModelChannelSubmitSection,
+  handleModelChannelGenerateSubmitSection,
   renderModelChannelsPanelSection,
 } from "../apps/shared-console/model-channel-panel.js";
 import { renderDetailSection } from "../apps/shared-console/detail-panel.js";
@@ -81,39 +86,74 @@ function escapeHtml(value: string) {
 }
 
 function createGeneratorElements(document: Document) {
+  const singleOption = document.createElement("label");
+  singleOption.className = "channel-mode-option";
+  const multiOption = document.createElement("label");
+  multiOption.className = "channel-mode-option";
+  const modeSingleInput = document.createElement("input");
+  modeSingleInput.type = "radio";
+  modeSingleInput.checked = true;
+  singleOption.appendChild(modeSingleInput);
+  const modeMultiInput = document.createElement("input");
+  modeMultiInput.type = "radio";
+  multiOption.appendChild(modeMultiInput);
+  const modelChannelSinglePanel = document.createElement("section");
+  const modelChannelMultiPanel = document.createElement("section");
+  modelChannelMultiPanel.classList.add("hidden");
+  const modelChannelMultiRows = document.createElement("div");
+  const modelChannelMultiRowsEmptyState = document.createElement("div");
   return {
-    modelChannelGenerateCards: document.createElement("div"),
-    modelChannelGenerateApiInput: { value: "openai-responses" },
+    modelChannelGenerateModeSingleInput: modeSingleInput,
+    modelChannelGenerateModeMultiInput: modeMultiInput,
+    modelChannelSinglePanel,
+    modelChannelMultiPanel,
+    modelChannelSingleBaseUrlInput: { value: "https://example.test/v1" },
+    modelChannelSingleApiInput: { value: "openai-responses" },
+    modelChannelSingleIdPrefixInput: { value: "base-id" },
+    modelChannelSingleNamePrefixInput: { value: "Base Name" },
+    modelChannelSingleApiKeysTextarea: { value: "sk-base" },
+    modelChannelSingleModelsTextarea: { value: "gpt-5-mini" },
     modelChannelGenerateReasoningCheckbox: { checked: true },
     modelChannelGenerateImageInputCheckbox: { checked: false },
     modelChannelGenerateRoundRobinCheckbox: { checked: true },
-    modelChannelGenerateBaseUrlInput: { value: "https://example.test/v1" },
-    modelChannelGenerateIdPrefixInput: { value: "base-id" },
-    modelChannelGenerateNamePrefixInput: { value: "Base Name" },
-    modelChannelGenerateApiKeysTextarea: { value: "sk-base" },
-    modelChannelGenerateModelsTextarea: { value: "gpt-5-mini" },
-    addModelChannelGenerateCardButton: document.createElement("button"),
+    modelChannelMultiRows,
+    modelChannelMultiRowsEmptyState,
+    modelChannelMultiModelsTextarea: { value: "gpt-5-mini" },
+    modelChannelMultiGroupIdInput: { value: "" },
+    modelChannelMultiGroupNameInput: { value: "" },
+    addModelChannelMultiRowButton: document.createElement("button"),
     importModelChannelBatchButton: document.createElement("button"),
-    clearModelChannelCardsButton: document.createElement("button"),
+    clearModelChannelMultiRowsButton: document.createElement("button"),
+    modelChannelGenerateBatchTextarea: document.createElement("textarea"),
   };
 }
 
 function createPanelElements(document: Document) {
-  return {
+  const elements = {
     modelChannelsForm: document.createElement("form"),
     modelChannelsPanel: document.createElement("div"),
     modelChannelsTextarea: document.createElement("textarea"),
     userModelConfigCheckbox: document.createElement("input"),
-    modelChannelGenerateBaseUrlInput: document.createElement("input"),
-    modelChannelGenerateApiInput: document.createElement("input"),
-    modelChannelGenerateIdPrefixInput: document.createElement("input"),
-    modelChannelGenerateNamePrefixInput: document.createElement("input"),
-    modelChannelGenerateApiKeysTextarea: document.createElement("textarea"),
-    modelChannelGenerateModelsTextarea: document.createElement("textarea"),
+    modelChannelGenerateModeSingleInput: document.createElement("input"),
+    modelChannelGenerateModeMultiInput: document.createElement("input"),
+    modelChannelSingleBaseUrlInput: document.createElement("input"),
+    modelChannelSingleApiInput: document.createElement("select"),
+    modelChannelSingleIdPrefixInput: document.createElement("input"),
+    modelChannelSingleNamePrefixInput: document.createElement("input"),
+    modelChannelSingleApiKeysTextarea: document.createElement("textarea"),
+    modelChannelSingleModelsTextarea: document.createElement("textarea"),
+    modelChannelMultiModelsTextarea: document.createElement("textarea"),
+    modelChannelMultiGroupIdInput: document.createElement("input"),
+    modelChannelMultiGroupNameInput: document.createElement("input"),
     modelChannelGenerateBatchTextarea: document.createElement("textarea"),
     modelChannelGenerateReasoningCheckbox: document.createElement("input"),
     modelChannelGenerateImageInputCheckbox: document.createElement("input"),
     modelChannelGenerateRoundRobinCheckbox: document.createElement("input"),
+    addModelChannelMultiRowButton: document.createElement("button"),
+    importModelChannelBatchButton: document.createElement("button"),
+    clearModelChannelMultiRowsButton: document.createElement("button"),
+    modelChannelMultiRows: document.createElement("div"),
+    modelChannelMultiRowsEmptyState: document.createElement("div"),
     generateModelChannelsButton: document.createElement("button"),
     autoUnassignRemovedModelChannelsCheckbox: document.createElement("input"),
     reloadModelChannelsButton: document.createElement("button"),
@@ -121,7 +161,19 @@ function createPanelElements(document: Document) {
     detailModelChannelForm: document.createElement("form"),
     detailModelChannelSelect: document.createElement("select"),
     clearDetailModelChannelButton: document.createElement("button"),
+    modelChannelSinglePanel: document.createElement("section"),
+    modelChannelMultiPanel: document.createElement("section"),
   };
+  const singleOption = document.createElement("label");
+  singleOption.className = "channel-mode-option";
+  singleOption.appendChild(elements.modelChannelGenerateModeSingleInput);
+  const multiOption = document.createElement("label");
+  multiOption.className = "channel-mode-option";
+  multiOption.appendChild(elements.modelChannelGenerateModeMultiInput);
+  elements.modelChannelGenerateModeSingleInput.type = "radio";
+  elements.modelChannelGenerateModeSingleInput.checked = true;
+  elements.modelChannelGenerateModeMultiInput.type = "radio";
+  return elements;
 }
 
 function createDetailElements(document: Document) {
@@ -155,55 +207,180 @@ describe("shared console model channel generator helpers", () => {
     ]);
   });
 
-  it("collects batch generators from cards with shared options", () => {
+  it("normalizes API aliases to canonical values", () => {
+    expect(normalizeModelChannelGeneratorApiValueSection("openai-chat-completions")).toBe("openai-completions");
+    expect(normalizeModelChannelGeneratorApiValueSection("/v1/chat/completions")).toBe("openai-completions");
+    expect(normalizeModelChannelGeneratorApiValueSection("Anthropic")).toBe("anthropic-messages");
+    expect(normalizeModelChannelGeneratorApiValueSection("", { allowBlank: true })).toBe("");
+  });
+
+  it("builds a single-url generator payload from explicit mode fields", () => {
     const dom = createDom();
     const elements = createGeneratorElements(dom.window.document);
 
-    appendModelChannelGenerateCardSection(elements, dom.window.document, escapeHtml, {
-      channelNamePrefix: "Alpha",
-      channelIdPrefix: "alpha",
-      baseUrl: "https://alpha.test/v1",
-      api: "",
-      modelIds: "gpt-5-mini\ngpt-5",
-      apiKeys: "sk-alpha-1\nsk-alpha-2",
-    });
+    const payload = buildSingleModelChannelGeneratorPayloadSection(
+      { userCanConfigureModels: false, channels: [], channelGroups: [] },
+      elements,
+    );
 
-    expect(collectBatchCardModelChannelGeneratorsSection(elements)).toEqual([
-      {
-        baseUrl: "https://alpha.test/v1",
+    expect(payload).toEqual({
+      settings: { userCanConfigureModels: false, channels: [], channelGroups: [] },
+      generator: {
+        baseUrl: "https://example.test/v1",
         api: "openai-responses",
-        channelIdPrefix: "alpha",
-        channelNamePrefix: "Alpha",
-        modelIds: ["gpt-5-mini", "gpt-5"],
-        apiKeys: ["sk-alpha-1", "sk-alpha-2"],
+        channelIdPrefix: "base-id",
+        channelNamePrefix: "Base Name",
+        apiKeys: "sk-base",
+        modelIds: "gpt-5-mini",
         reasoning: true,
         allowImageInput: false,
         createRoundRobinGroup: true,
       },
-    ]);
+    });
   });
 
-  it("replaces the lone blank card when importing batch definitions", () => {
+  it("imports multi-url batch rows and builds a generation plan", () => {
     const dom = createDom();
     const elements = createGeneratorElements(dom.window.document);
 
-    appendModelChannelGenerateCardSection(elements, dom.window.document, escapeHtml, {});
-
-    const count = importBatchModelChannelGeneratorsAsCardsSection(
+    const count = importBatchModelChannelGeneratorsAsRowsSection(
       elements,
       dom.window.document,
       escapeHtml,
       [
-        "Alpha|alpha|https://alpha.test/v1|gpt-5-mini|sk-alpha",
-        "Beta|beta|https://beta.test/v1|gpt-5|sk-beta|openai-chat-completions",
+        "Alpha|alpha|https://alpha.test/v1|gpt-5-mini,gpt-5|sk-alpha",
+        "Beta|beta|https://beta.test/v1|gpt-5-mini,gpt-5|sk-beta|openai-chat-completions",
       ].join("\n"),
     );
 
     expect(count).toBe(2);
-    const cards = elements.modelChannelGenerateCards.querySelectorAll(".generator-card");
-    expect(cards).toHaveLength(2);
-    expect(cards[0].querySelector('[data-field="channelNamePrefix"]')?.value).toBe("Alpha");
-    expect(cards[1].querySelector('[data-field="api"]')?.value).toBe("openai-chat-completions");
+    expect(elements.modelChannelMultiModelsTextarea.value).toBe("gpt-5-mini\ngpt-5");
+    const rows = elements.modelChannelMultiRows.querySelectorAll(".channel-multi-row");
+    expect(rows).toHaveLength(2);
+    expect(readMultiUrlModelChannelRowFieldSection(rows[1], "api")).toBe("openai-completions");
+
+    const plan = buildMultiUrlModelChannelGenerationPlanSection(elements);
+    expect(plan).toEqual({
+      generators: [
+        {
+          baseUrl: "https://alpha.test/v1",
+          api: "openai-responses",
+          channelIdPrefix: "alpha",
+          channelNamePrefix: "Alpha",
+          modelIds: ["gpt-5-mini", "gpt-5"],
+          apiKeys: ["sk-alpha"],
+          reasoning: true,
+          allowImageInput: false,
+          createRoundRobinGroup: false,
+        },
+        {
+          baseUrl: "https://beta.test/v1",
+          api: "openai-completions",
+          channelIdPrefix: "beta",
+          channelNamePrefix: "Beta",
+          modelIds: ["gpt-5-mini", "gpt-5"],
+          apiKeys: ["sk-beta"],
+          reasoning: true,
+          allowImageInput: false,
+          createRoundRobinGroup: false,
+        },
+      ],
+      group: {
+        enabled: true,
+        groupId: "",
+        groupName: "",
+      },
+    });
+  });
+
+  it("hydrates saved settings into the explicit multi-url editor", () => {
+    const dom = createDom();
+    const elements = createGeneratorElements(dom.window.document);
+
+    const result = hydrateModelChannelGeneratorEditorFromSettingsSection(
+      elements,
+      dom.window.document,
+      escapeHtml,
+      {
+        userCanConfigureModels: false,
+        channels: [
+          {
+            id: "alpha",
+            name: "Alpha",
+            baseUrl: "https://alpha.test/v1",
+            api: "Anthropic",
+            models: [{ id: "claude-sonnet-4-5", reasoning: true, input: { text: true } }],
+            apiKey: "sk-alpha",
+          },
+          {
+            id: "beta",
+            name: "Beta",
+            baseUrl: "https://beta.test/v1",
+            api: "openai-responses",
+            models: [{ id: "claude-sonnet-4-5", reasoning: true, input: { text: true } }],
+            apiKey: "sk-beta",
+          },
+        ],
+        channelGroups: [
+          {
+            id: "global-rr",
+            name: "Global RR",
+            strategy: "round-robin",
+            channelIds: ["alpha", "beta"],
+          },
+        ],
+      },
+    );
+
+    expect(result).toEqual({ mode: "multi", rowCount: 2 });
+    expect(getModelChannelGeneratorModeSection(elements)).toBe("multi");
+    expect(elements.modelChannelMultiModelsTextarea.value).toBe("claude-sonnet-4-5");
+    expect(elements.modelChannelMultiGroupIdInput.value).toBe("global-rr");
+    expect(elements.modelChannelMultiGroupNameInput.value).toBe("Global RR");
+    const rows = elements.modelChannelMultiRows.querySelectorAll(".channel-multi-row");
+    expect(rows).toHaveLength(2);
+    expect(readMultiUrlModelChannelRowFieldSection(rows[0], "api")).toBe("anthropic-messages");
+    expect(readMultiUrlModelChannelRowFieldSection(rows[1], "apiKey")).toBe("sk-beta");
+  });
+
+  it("toggles the explicit mode panels and appends a synthesized round-robin group", () => {
+    const dom = createDom();
+    const elements = createGeneratorElements(dom.window.document);
+
+    setModelChannelGeneratorModeSection(elements, "multi");
+    expect(elements.modelChannelSinglePanel.classList.contains("hidden")).toBe(true);
+    expect(elements.modelChannelMultiPanel.classList.contains("hidden")).toBe(false);
+
+    appendMultiUrlModelChannelRowSection(elements, dom.window.document, escapeHtml, {
+      channelNamePrefix: "Alpha",
+      channelIdPrefix: "alpha",
+      baseUrl: "https://alpha.test/v1",
+      api: "openai-responses",
+      apiKey: "sk-alpha",
+    });
+    renumberMultiUrlModelChannelRowsSection(elements);
+    clearMultiUrlModelChannelRowsSection(elements);
+    expect(elements.modelChannelMultiRows.querySelectorAll(".channel-multi-row")).toHaveLength(0);
+
+    const result = applyGeneratedMultiUrlRoundRobinGroupSection(
+      {
+        userCanConfigureModels: false,
+        channels: [{ id: "alpha" }, { id: "beta" }],
+        channelGroups: [],
+      },
+      ["alpha", "beta"],
+      { enabled: true, groupId: "global-rr", groupName: "Global RR" },
+    );
+
+    expect(result.groupId).toBe("global-rr");
+    expect(result.settings.channelGroups).toEqual([
+      {
+        id: "global-rr",
+        name: "Global RR",
+        strategy: "round-robin",
+        channelIds: ["alpha", "beta"],
+      },
+    ]);
   });
 });
 
@@ -632,11 +809,10 @@ describe("shared console detail flow helpers", () => {
 });
 
 describe("shared console panel helpers", () => {
-  it("locks the model channel panel outside admin mode", () => {
+  it("locks the model channel panel outside admin mode but keeps reload available", () => {
     const dom = createDom();
     const elements = createPanelElements(dom.window.document);
-    const ensureCards = vi.fn();
-    const setCardsDisabled = vi.fn();
+    const setRowsDisabled = vi.fn();
     const state = {
       adminModeAvailable: true,
       modelChannelSettings: null,
@@ -652,15 +828,77 @@ describe("shared console panel helpers", () => {
       state,
       elements,
       isAdminModeEnabled: () => false,
-      defaultModelChannelSettings: () => ({ userCanConfigureModels: false, channels: [] }),
-      ensureModelChannelGenerateCardsInitialized: ensureCards,
-      setModelChannelGenerateCardsDisabled: setCardsDisabled,
+      defaultModelChannelSettings: () => ({ userCanConfigureModels: false, channels: [], channelGroups: [] }),
+      setModelChannelGenerateRowsDisabled: setRowsDisabled,
     });
 
-    expect(ensureCards).toHaveBeenCalledOnce();
-    expect(setCardsDisabled).toHaveBeenCalledWith(true);
+    expect(setRowsDisabled).toHaveBeenCalledWith(true);
     expect(elements.modelChannelsTextarea.disabled).toBe(true);
+    expect(elements.reloadModelChannelsButton.disabled).toBe(false);
     expect(elements.modelChannelsPanel.textContent).toContain("Enter admin mode");
+    expect(elements.modelChannelsPanel.textContent).toContain("先进入管理员模式");
+  });
+
+  it("disables reload when server admin mode is unavailable", () => {
+    const dom = createDom();
+    const elements = createPanelElements(dom.window.document);
+    const setRowsDisabled = vi.fn();
+    const state = {
+      adminModeAvailable: false,
+      modelChannelSettings: null,
+      modelChannelSettingsText: "",
+      modelChannelEditorDirty: false,
+      modelChannelCatalog: {
+        channels: [],
+        userCanConfigureModels: false,
+      },
+    };
+
+    renderModelChannelsPanelSection({
+      state,
+      elements,
+      isAdminModeEnabled: () => false,
+      defaultModelChannelSettings: () => ({ userCanConfigureModels: false, channels: [], channelGroups: [] }),
+      setModelChannelGenerateRowsDisabled: setRowsDisabled,
+    });
+
+    expect(setRowsDisabled).toHaveBeenCalledWith(true);
+    expect(elements.reloadModelChannelsButton.disabled).toBe(true);
+    expect(elements.modelChannelsPanel.textContent).toContain("Server admin mode is not enabled");
+    expect(elements.modelChannelsPanel.textContent).toContain("只能查看");
+  });
+
+  it("renders structured admin status summary when admin mode is enabled", () => {
+    const dom = createDom();
+    const elements = createPanelElements(dom.window.document);
+    const setRowsDisabled = vi.fn();
+    const state = {
+      adminModeAvailable: true,
+      modelChannelSettings: {
+        userCanConfigureModels: true,
+        channels: [{ id: "alpha" }, { id: "beta" }],
+        channelGroups: [],
+      },
+      modelChannelSettingsText: '{"channels":[{"id":"alpha"},{"id":"beta"}]}',
+      modelChannelEditorDirty: true,
+      modelChannelCatalog: {
+        channels: [{ id: "alpha" }, { id: "beta" }],
+        userCanConfigureModels: true,
+      },
+    };
+
+    renderModelChannelsPanelSection({
+      state,
+      elements,
+      isAdminModeEnabled: () => true,
+      defaultModelChannelSettings: () => ({ userCanConfigureModels: false, channels: [], channelGroups: [] }),
+      setModelChannelGenerateRowsDisabled: setRowsDisabled,
+    });
+
+    expect(setRowsDisabled).toHaveBeenCalledWith(false);
+    expect(elements.modelChannelsPanel.textContent).toContain("已进入，可维护全局渠道");
+    expect(elements.modelChannelsPanel.textContent).toContain("有未保存变更");
+    expect(elements.modelChannelsPanel.textContent).toContain("左侧明确区分单 URL 与多 URL 两种模式");
   });
 
   it("renders selected detail state with admin controls enabled", () => {
@@ -728,7 +966,7 @@ describe("shared console panel helpers", () => {
     expect(updateSelectedInstanceModelChannel).toHaveBeenCalledWith("alpha");
   });
 
-  it("binds model channel events for add/import/clear/reload/detail clear", async () => {
+  it("binds model channel events for mode switching, multi-url rows, reload, and detail clear in admin mode", async () => {
     const dom = createDom();
     const document = dom.window.document;
     const generatorElements = createGeneratorElements(document);
@@ -737,6 +975,7 @@ describe("shared console panel helpers", () => {
       ...generatorElements,
       ...panelElements,
     };
+    elements.modelChannelMultiPanel.classList.add("hidden");
     const state = {
       modelChannelEditorDirty: false,
     };
@@ -747,49 +986,71 @@ describe("shared console panel helpers", () => {
     const renderAll = vi.fn();
     const handleDetailModelChannelSubmit = vi.fn();
     const updateSelectedInstanceModelChannel = vi.fn();
+    const setModelChannelGenerateMode = vi.fn((mode: string) =>
+      setModelChannelGeneratorModeSection(elements, mode),
+    );
 
     bindModelChannelEventsSection({
       elements,
       handleModelChannelsSubmit,
-      appendModelChannelGenerateCard: (values?: Record<string, string>) =>
-        appendModelChannelGenerateCardSection(elements, document, escapeHtml, values),
-      buildModelChannelGenerateCardDefaultValues: () =>
-        buildModelChannelGenerateCardDefaultValuesSection(elements),
-      readModelChannelGenerateCardField: readModelChannelGenerateCardFieldSection,
-      ensureModelChannelGenerateCardsInitialized: () =>
-        ensureModelChannelGenerateCardsInitializedSection(elements, document, escapeHtml),
-      renumberModelChannelGenerateCards: () => renumberModelChannelGenerateCardsSection(elements),
+      appendMultiUrlModelChannelRow: (values?: Record<string, string>) =>
+        appendMultiUrlModelChannelRowSection(elements, document, escapeHtml, values),
+      readMultiUrlModelChannelRowField: readMultiUrlModelChannelRowFieldSection,
+      renumberMultiUrlModelChannelRows: () => renumberMultiUrlModelChannelRowsSection(elements),
       pushStatus,
-      importBatchModelChannelGeneratorsAsCards: (raw: string) =>
-        importBatchModelChannelGeneratorsAsCardsSection(elements, document, escapeHtml, raw),
-      clearModelChannelGenerateCards: (options?: { keepOneBlank?: boolean }) =>
-        clearModelChannelGenerateCardsSection(elements, document, escapeHtml, options),
+      importBatchModelChannelGeneratorsAsRows: (raw: string) =>
+        importBatchModelChannelGeneratorsAsRowsSection(elements, document, escapeHtml, raw),
+      clearMultiUrlModelChannelRows: () => clearMultiUrlModelChannelRowsSection(elements),
+      setModelChannelGenerateMode,
       state,
       handleModelChannelGenerateSubmit,
       loadModelChannelConfig,
       renderAll,
       handleDetailModelChannelSubmit,
       updateSelectedInstanceModelChannel,
+      isAdminModeEnabled: () => true,
     });
 
-    elements.addModelChannelGenerateCardButton.dispatchEvent(
-      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
-    );
-    expect(elements.modelChannelGenerateCards.querySelectorAll(".generator-card")).toHaveLength(1);
+    elements.modelChannelsForm.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+    expect(handleModelChannelsSubmit).toHaveBeenCalledTimes(1);
+
+    elements.modelChannelGenerateModeMultiInput.checked = true;
+    elements.modelChannelGenerateModeMultiInput.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    expect(setModelChannelGenerateMode).toHaveBeenCalledWith("multi");
+    expect(elements.modelChannelSinglePanel.classList.contains("hidden")).toBe(true);
+    expect(elements.modelChannelMultiPanel.classList.contains("hidden")).toBe(false);
 
     elements.modelChannelGenerateBatchTextarea.value =
       "Alpha|alpha|https://alpha.test/v1|gpt-5-mini|sk-alpha";
     elements.importModelChannelBatchButton.dispatchEvent(
       new dom.window.MouseEvent("click", { bubbles: true }),
     );
-    expect(pushStatus).toHaveBeenCalledWith("success", "Imported batch definitions", "Added 1 cards.");
-    expect(elements.modelChannelGenerateCards.querySelectorAll(".generator-card").length).toBeGreaterThanOrEqual(1);
+    expect(pushStatus).toHaveBeenCalledWith("success", "Imported batch definitions", "Added 1 rows.");
+    expect(elements.modelChannelMultiRows.querySelectorAll(".channel-multi-row")).toHaveLength(1);
 
-    elements.clearModelChannelCardsButton.dispatchEvent(
+    let firstRow = elements.modelChannelMultiRows.querySelector(".channel-multi-row");
+    expect(firstRow).not.toBeNull();
+    firstRow?.querySelector('[data-action="duplicate-model-channel-multi-row"]')?.dispatchEvent(
       new dom.window.MouseEvent("click", { bubbles: true }),
     );
-    expect(pushStatus).toHaveBeenCalledWith("info", "Cleared cards", "Kept one blank card.");
-    expect(elements.modelChannelGenerateCards.querySelectorAll(".generator-card")).toHaveLength(1);
+    expect(elements.modelChannelMultiRows.querySelectorAll(".channel-multi-row")).toHaveLength(2);
+
+    firstRow = elements.modelChannelMultiRows.querySelector(".channel-multi-row");
+    firstRow?.querySelector('[data-action="remove-model-channel-multi-row"]')?.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true }),
+    );
+    expect(elements.modelChannelMultiRows.querySelectorAll(".channel-multi-row")).toHaveLength(1);
+
+    elements.addModelChannelMultiRowButton.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    expect(elements.modelChannelMultiRows.querySelectorAll(".channel-multi-row")).toHaveLength(2);
+
+    elements.clearModelChannelMultiRowsButton.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true }),
+    );
+    expect(pushStatus).toHaveBeenCalledWith("info", "Cleared multi URL rows", "Multi URL mode is now empty.");
+    expect(elements.modelChannelMultiRows.querySelectorAll(".channel-multi-row")).toHaveLength(0);
 
     elements.modelChannelsTextarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
     expect(state.modelChannelEditorDirty).toBe(true);
@@ -822,5 +1083,54 @@ describe("shared console panel helpers", () => {
     );
     expect(elements.detailModelChannelSelect.value).toBe("");
     expect(updateSelectedInstanceModelChannel).toHaveBeenCalledWith(null);
+  });
+
+});
+
+describe("shared console reload gating", () => {
+  it("prompts before reload when admin mode is not enabled", async () => {
+    const dom = createDom();
+    const document = dom.window.document;
+    const generatorElements = createGeneratorElements(document);
+    const panelElements = createPanelElements(document);
+    const elements = {
+      ...generatorElements,
+      ...panelElements,
+    };
+    const pushStatus = vi.fn();
+    const loadModelChannelConfig = vi.fn().mockResolvedValue(undefined);
+    const renderAll = vi.fn();
+
+    bindModelChannelEventsSection({
+      elements,
+      handleModelChannelsSubmit: vi.fn(),
+      appendMultiUrlModelChannelRow: (values?: Record<string, string>) =>
+        appendMultiUrlModelChannelRowSection(elements, document, escapeHtml, values),
+      readMultiUrlModelChannelRowField: readMultiUrlModelChannelRowFieldSection,
+      renumberMultiUrlModelChannelRows: () => renumberMultiUrlModelChannelRowsSection(elements),
+      pushStatus,
+      importBatchModelChannelGeneratorsAsRows: (raw: string) =>
+        importBatchModelChannelGeneratorsAsRowsSection(elements, document, escapeHtml, raw),
+      clearMultiUrlModelChannelRows: () => clearMultiUrlModelChannelRowsSection(elements),
+      setModelChannelGenerateMode: (mode: string) => setModelChannelGeneratorModeSection(elements, mode),
+      state: {
+        modelChannelEditorDirty: false,
+      },
+      handleModelChannelGenerateSubmit: vi.fn(),
+      loadModelChannelConfig,
+      renderAll,
+      handleDetailModelChannelSubmit: vi.fn(),
+      updateSelectedInstanceModelChannel: vi.fn(),
+      isAdminModeEnabled: () => false,
+    });
+
+    elements.reloadModelChannelsButton.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true }),
+    );
+    await Promise.resolve();
+
+    expect(pushStatus).toHaveBeenCalledWith("error", "Reload failed", "请先进入管理员模式。", "channels");
+    expect(loadModelChannelConfig).not.toHaveBeenCalled();
+    expect(renderAll).not.toHaveBeenCalled();
   });
 });

@@ -41,7 +41,7 @@ export async function loadInstanceDetailSection(params) {
     isCurrentDetailRequest,
   });
   if (announce) {
-    pushStatus("info", `宸插垏鎹㈠埌${instanceScopeLabel(scope)} ${id}`, payload.item?.probe?.version || "鏆傛棤鐗堟湰淇℃伅");
+    pushStatus("info", `已切换到${instanceScopeLabel(scope)} ${id}`, payload.item?.probe?.version || "暂无版本信息");
   }
 }
 

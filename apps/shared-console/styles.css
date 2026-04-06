@@ -618,9 +618,177 @@ body {
   font-size: 18px;
 }
 
-.model-generator-quick,
-.generator-card-collection {
+.channel-status-panel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.channel-status-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
+}
+
+.channel-status-card {
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.channel-status-label {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.channel-status-value {
+  margin-top: 10px;
+  font-size: 15px;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.channel-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.channel-status-actions .callout {
+  flex: 1 1 340px;
+}
+
+.channel-workbench-form {
+  display: block;
+}
+
+.channel-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.95fr);
+  gap: 18px;
+}
+
+.channel-workbench-main,
+.channel-workbench-side {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+}
+
+.channel-workbench-side {
+  position: relative;
+}
+
+.channel-workbench-card {
+  gap: 16px;
+}
+
+.channel-inline-toggle {
+  justify-self: end;
+}
+
+.channel-generator-options {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.channel-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.channel-mode-option {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+}
+
+.channel-mode-option:hover {
+  transform: translateY(-1px);
+  border-color: rgba(115, 224, 169, 0.3);
+}
+
+.channel-mode-option.active {
+  border-color: rgba(115, 224, 169, 0.65);
+  background: rgba(43, 212, 141, 0.12);
+}
+
+.channel-mode-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.channel-mode-option-title {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.channel-mode-option-note {
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.channel-multi-shared-grid {
+  margin-bottom: 4px;
+}
+
+.channel-multi-empty-state {
+  min-height: 150px;
+}
+
+.channel-import-panel {
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+
+.channel-import-panel summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 14px 16px;
+  color: var(--text-soft);
+  font-weight: 600;
+}
+
+.channel-import-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.channel-import-panel[open] summary {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.channel-import-panel-body {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px 16px;
+}
+
+.channel-draft-card {
+  position: sticky;
+  top: 16px;
+  gap: 16px;
+}
+
+.channel-draft-note {
+  font-size: 13px;
 }
 
 .model-generator-grid {
@@ -803,12 +971,23 @@ body {
   .summary-grid,
   .overview-grid,
   .main-grid,
-  .usage-summary {
+  .usage-summary,
+  .channel-status-summary,
+  .channel-workbench,
+  .channel-mode-switch {
     grid-template-columns: 1fr 1fr;
   }
 
   .main-grid {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .channel-workbench-side {
+    grid-column: 1 / -1;
+  }
+
+  .channel-draft-card {
+    position: static;
   }
 
   .panel-detail {
@@ -836,15 +1015,10 @@ body {
   }
 
   .model-generator-grid,
-  .generator-card-header,
-  .generator-card-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .generator-card-header {
-    display: grid;
-  }
-
+  .generator-card-grid,
+  .channel-status-summary,
+  .channel-workbench,
+  .channel-mode-switch,
   .hero,
   .summary-grid,
   .overview-grid,
@@ -853,6 +1027,16 @@ body {
   .meta-grid,
   .probe-grid {
     grid-template-columns: 1fr;
+  }
+
+  .generator-card-header,
+  .detail-card-header,
+  .channel-status-actions {
+    display: grid;
+  }
+
+  .channel-inline-toggle {
+    justify-self: start;
   }
 
   .hero {

@@ -83,8 +83,7 @@ export function renderModelChannelsPanelSection(params) {
     elements,
     isAdminModeEnabled,
     defaultModelChannelSettings,
-    ensureModelChannelGenerateCardsInitialized,
-    setModelChannelGenerateCardsDisabled,
+    setModelChannelGenerateRowsDisabled,
   } = params;
 
   if (
@@ -99,7 +98,6 @@ export function renderModelChannelsPanelSection(params) {
 
   const adminEnabled = isAdminModeEnabled();
   const settings = state.modelChannelSettings || defaultModelChannelSettings();
-  ensureModelChannelGenerateCardsInitialized();
   if (!state.modelChannelEditorDirty) {
     elements.userModelConfigCheckbox.checked = Boolean(
       state.modelChannelSettings?.userCanConfigureModels ?? state.modelChannelCatalog.userCanConfigureModels,
@@ -112,19 +110,26 @@ export function renderModelChannelsPanelSection(params) {
   const toggleTargets = [
     elements.userModelConfigCheckbox,
     elements.modelChannelsTextarea,
-    elements.modelChannelGenerateBaseUrlInput,
-    elements.modelChannelGenerateApiInput,
-    elements.modelChannelGenerateIdPrefixInput,
-    elements.modelChannelGenerateNamePrefixInput,
-    elements.modelChannelGenerateApiKeysTextarea,
-    elements.modelChannelGenerateModelsTextarea,
+    elements.modelChannelGenerateModeSingleInput,
+    elements.modelChannelGenerateModeMultiInput,
+    elements.modelChannelSingleBaseUrlInput,
+    elements.modelChannelSingleApiInput,
+    elements.modelChannelSingleIdPrefixInput,
+    elements.modelChannelSingleNamePrefixInput,
+    elements.modelChannelSingleApiKeysTextarea,
+    elements.modelChannelSingleModelsTextarea,
+    elements.modelChannelMultiModelsTextarea,
+    elements.modelChannelMultiGroupIdInput,
+    elements.modelChannelMultiGroupNameInput,
     elements.modelChannelGenerateBatchTextarea,
     elements.modelChannelGenerateReasoningCheckbox,
     elements.modelChannelGenerateImageInputCheckbox,
     elements.modelChannelGenerateRoundRobinCheckbox,
+    elements.addModelChannelMultiRowButton,
+    elements.importModelChannelBatchButton,
+    elements.clearModelChannelMultiRowsButton,
     elements.generateModelChannelsButton,
     elements.autoUnassignRemovedModelChannelsCheckbox,
-    elements.reloadModelChannelsButton,
     elements.saveModelChannelsButton,
   ];
   for (const target of toggleTargets) {
@@ -132,19 +137,92 @@ export function renderModelChannelsPanelSection(params) {
       target.disabled = !adminEnabled;
     }
   }
-  setModelChannelGenerateCardsDisabled(!adminEnabled);
+  if (elements.reloadModelChannelsButton) {
+    elements.reloadModelChannelsButton.disabled = !state.adminModeAvailable;
+  }
+  setModelChannelGenerateRowsDisabled(!adminEnabled);
+
+  const channelCount = state.modelChannelCatalog.channels.length;
+  const userConfigLabel = state.modelChannelCatalog.userCanConfigureModels ? "允许" : "关闭";
+  const draftStateLabel = state.modelChannelEditorDirty ? "有未保存变更" : "已与当前配置同步";
 
   if (!state.adminModeAvailable) {
-    elements.modelChannelsPanel.textContent = "Server admin mode is not enabled.";
+    elements.modelChannelsPanel.innerHTML = `
+      <div class="channel-status-summary">
+        <article class="channel-status-card">
+          <span class="channel-status-label">管理员模式</span>
+          <div class="channel-status-value">服务端未启用</div>
+        </article>
+        <article class="channel-status-card">
+          <span class="channel-status-label">当前渠道数</span>
+          <div class="channel-status-value">${channelCount}</div>
+        </article>
+        <article class="channel-status-card">
+          <span class="channel-status-label">用户自定义模型</span>
+          <div class="channel-status-value">${userConfigLabel}</div>
+        </article>
+        <article class="channel-status-card">
+          <span class="channel-status-label">当前状态</span>
+          <div class="channel-status-value">只能查看，不能维护全局渠道。</div>
+        </article>
+      </div>
+      <div class="channel-status-actions">
+        <div class="callout">Server admin mode is not enabled.</div>
+      </div>
+    `;
     return;
   }
+
   if (!adminEnabled) {
-    elements.modelChannelsPanel.textContent = "Enter admin mode to manage global model channels.";
+    elements.modelChannelsPanel.innerHTML = `
+      <div class="channel-status-summary">
+        <article class="channel-status-card">
+          <span class="channel-status-label">管理员模式</span>
+          <div class="channel-status-value">未进入</div>
+        </article>
+        <article class="channel-status-card">
+          <span class="channel-status-label">当前渠道数</span>
+          <div class="channel-status-value">${channelCount}</div>
+        </article>
+        <article class="channel-status-card">
+          <span class="channel-status-label">用户自定义模型</span>
+          <div class="channel-status-value">${userConfigLabel}</div>
+        </article>
+        <article class="channel-status-card">
+          <span class="channel-status-label">下一步</span>
+          <div class="channel-status-value">先进入管理员模式，再选择单 URL 或多 URL 模式生成草稿。</div>
+        </article>
+      </div>
+      <div class="channel-status-actions">
+        <div class="callout">Enter admin mode to manage global model channels.</div>
+      </div>
+    `;
     return;
   }
-  elements.modelChannelsPanel.textContent = `Channels: ${state.modelChannelCatalog.channels.length}. User model config: ${
-    state.modelChannelCatalog.userCanConfigureModels ? "enabled" : "disabled"
-  }. Saving updates global settings and may require instance restarts.`;
+
+  elements.modelChannelsPanel.innerHTML = `
+    <div class="channel-status-summary">
+      <article class="channel-status-card">
+        <span class="channel-status-label">管理员模式</span>
+        <div class="channel-status-value">已进入，可维护全局渠道</div>
+      </article>
+      <article class="channel-status-card">
+        <span class="channel-status-label">当前渠道数</span>
+        <div class="channel-status-value">${channelCount}</div>
+      </article>
+      <article class="channel-status-card">
+        <span class="channel-status-label">用户自定义模型</span>
+        <div class="channel-status-value">${userConfigLabel}</div>
+      </article>
+      <article class="channel-status-card">
+        <span class="channel-status-label">草稿状态</span>
+        <div class="channel-status-value">${draftStateLabel}</div>
+      </article>
+    </div>
+    <div class="channel-status-actions">
+      <div class="callout">左侧明确区分单 URL 与多 URL 两种模式，生成后右侧 JSON 会立即更新；确认无误后再保存全局渠道。</div>
+    </div>
+  `;
 }
 
 export function handleModelChannelsSubmitSection(params) {
@@ -208,12 +286,13 @@ export function handleModelChannelGenerateSubmitSection(params) {
     pushStatus,
     setBusy,
     buildModelChannelGeneratorBaseSettings,
-    collectBatchCardModelChannelGenerators,
-    elements,
-    parseBatchModelChannelGenerators,
+    getModelChannelGeneratorMode,
+    buildMultiUrlModelChannelGenerationPlan,
     fetchJson,
     normalizeModelChannelSettingsForEditor,
     buildSingleModelChannelGeneratorPayload,
+    applyGeneratedMultiUrlRoundRobinGroup,
+    elements,
     state,
     renderAll,
     updateConnectionNote,
@@ -227,15 +306,14 @@ export function handleModelChannelGenerateSubmitSection(params) {
     setBusy(true);
     try {
       const baseSettings = buildModelChannelGeneratorBaseSettings();
-      const cardGenerators = collectBatchCardModelChannelGenerators();
-      const batchRaw = elements.modelChannelGenerateBatchTextarea?.value?.trim() || "";
+      const mode = getModelChannelGeneratorMode();
       let nextSettings = baseSettings;
       const generatedChannelIds = [];
       const generatedGroupIds = [];
 
-      if (cardGenerators.length > 0 || batchRaw) {
-        const generators = cardGenerators.length > 0 ? cardGenerators : parseBatchModelChannelGenerators(batchRaw);
-        for (const generator of generators) {
+      if (mode === "multi") {
+        const plan = buildMultiUrlModelChannelGenerationPlan();
+        for (const generator of plan.generators) {
           const response = await fetchJson("/api/model-channels/generate", {
             method: "POST",
             adminAuth: true,
@@ -251,6 +329,11 @@ export function handleModelChannelGenerateSubmitSection(params) {
           if (groupId) {
             generatedGroupIds.push(groupId);
           }
+        }
+        const groupResult = applyGeneratedMultiUrlRoundRobinGroup(nextSettings, generatedChannelIds, plan.group);
+        nextSettings = normalizeModelChannelSettingsForEditor(groupResult.settings ?? nextSettings);
+        if (groupResult.groupId) {
+          generatedGroupIds.push(groupResult.groupId);
         }
       } else {
         const payload = buildSingleModelChannelGeneratorPayload(baseSettings);
@@ -276,11 +359,13 @@ export function handleModelChannelGenerateSubmitSection(params) {
       state.modelChannelEditorDirty = true;
       renderAll();
       const detailParts = [];
-      if (generatedChannelIds.length > 0) {
-        detailParts.push(`Channels: ${generatedChannelIds.join(", ")}`);
+      const uniqueChannelIds = [...new Set(generatedChannelIds.map((channelId) => String(channelId || "").trim()).filter(Boolean))];
+      const uniqueGroupIds = [...new Set(generatedGroupIds.map((groupId) => String(groupId || "").trim()).filter(Boolean))];
+      if (uniqueChannelIds.length > 0) {
+        detailParts.push(`Channels: ${uniqueChannelIds.join(", ")}`);
       }
-      if (generatedGroupIds.length > 0) {
-        detailParts.push(`Groups: ${generatedGroupIds.join(", ")}`);
+      if (uniqueGroupIds.length > 0) {
+        detailParts.push(`Groups: ${uniqueGroupIds.join(", ")}`);
       }
       detailParts.push("Draft JSON updated. Save to persist.");
       pushStatus("success", "Generated model channel draft", detailParts.join(" "));
@@ -305,63 +390,72 @@ export function bindModelChannelEventsSection(params) {
   const {
     elements,
     handleModelChannelsSubmit,
-    appendModelChannelGenerateCard,
-    buildModelChannelGenerateCardDefaultValues,
-    readModelChannelGenerateCardField,
-    ensureModelChannelGenerateCardsInitialized,
-    renumberModelChannelGenerateCards,
+    appendMultiUrlModelChannelRow,
+    readMultiUrlModelChannelRowField,
+    renumberMultiUrlModelChannelRows,
     pushStatus,
-    importBatchModelChannelGeneratorsAsCards,
-    clearModelChannelGenerateCards,
+    importBatchModelChannelGeneratorsAsRows,
+    clearMultiUrlModelChannelRows,
+    setModelChannelGenerateMode,
     state,
     handleModelChannelGenerateSubmit,
     loadModelChannelConfig,
     renderAll,
     handleDetailModelChannelSubmit,
     updateSelectedInstanceModelChannel,
+    isAdminModeEnabled,
   } = params;
 
   elements.modelChannelsForm?.addEventListener("submit", (event) => {
     void handleModelChannelsSubmit(event);
   });
-  elements.addModelChannelGenerateCardButton?.addEventListener("click", (event) => {
-    event.preventDefault();
-    const card = appendModelChannelGenerateCard(buildModelChannelGenerateCardDefaultValues());
-    card?.querySelector('[data-field="channelNamePrefix"]')?.focus();
+  elements.modelChannelGenerateModeSingleInput?.addEventListener("change", () => {
+    if (elements.modelChannelGenerateModeSingleInput.checked) {
+      setModelChannelGenerateMode("single");
+    }
   });
-  elements.modelChannelGenerateCards?.addEventListener("click", (event) => {
-    if (!(event.target instanceof Element)) {
+  elements.modelChannelGenerateModeMultiInput?.addEventListener("change", () => {
+    if (elements.modelChannelGenerateModeMultiInput.checked) {
+      setModelChannelGenerateMode("multi");
+    }
+  });
+  elements.addModelChannelMultiRowButton?.addEventListener("click", (event) => {
+    event.preventDefault();
+    const row = appendMultiUrlModelChannelRow();
+    row?.querySelector('[data-field="channelNamePrefix"]')?.focus();
+  });
+  elements.modelChannelMultiRows?.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!target || typeof target !== "object" || !("closest" in target)) {
       return;
     }
-    const actionButton = event.target.closest("[data-action]");
+    const actionButton = target.closest("[data-action]");
     if (!actionButton) {
       return;
     }
-    const card = actionButton.closest(".generator-card");
-    if (!card) {
+    const row = actionButton.closest(".channel-multi-row");
+    if (!row) {
       return;
     }
     const action = actionButton.getAttribute("data-action");
-    if (action === "remove-model-channel-generate-card") {
-      card.remove();
-      ensureModelChannelGenerateCardsInitialized();
-      renumberModelChannelGenerateCards();
+    if (action === "remove-model-channel-multi-row") {
+      row.remove();
+      renumberMultiUrlModelChannelRows();
       return;
     }
-    if (action === "duplicate-model-channel-generate-card") {
-      const duplicate = appendModelChannelGenerateCard({
-        channelNamePrefix: readModelChannelGenerateCardField(card, "channelNamePrefix"),
-        channelIdPrefix: readModelChannelGenerateCardField(card, "channelIdPrefix"),
-        baseUrl: readModelChannelGenerateCardField(card, "baseUrl"),
-        api: readModelChannelGenerateCardField(card, "api"),
-        modelIds: readModelChannelGenerateCardField(card, "modelIds"),
-        apiKeys: readModelChannelGenerateCardField(card, "apiKeys"),
+    if (action === "duplicate-model-channel-multi-row") {
+      const duplicate = appendMultiUrlModelChannelRow({
+        channelNamePrefix: readMultiUrlModelChannelRowField(row, "channelNamePrefix"),
+        channelIdPrefix: readMultiUrlModelChannelRowField(row, "channelIdPrefix"),
+        baseUrl: readMultiUrlModelChannelRowField(row, "baseUrl"),
+        api: readMultiUrlModelChannelRowField(row, "api"),
+        apiKey: readMultiUrlModelChannelRowField(row, "apiKey"),
       });
       duplicate?.querySelector('[data-field="channelNamePrefix"]')?.focus();
     }
   });
-  elements.modelChannelGenerateCards?.addEventListener("input", () => {
-    renumberModelChannelGenerateCards();
+  elements.modelChannelMultiRows?.addEventListener("input", () => {
+    renumberMultiUrlModelChannelRows();
   });
   elements.importModelChannelBatchButton?.addEventListener("click", () => {
     const raw = elements.modelChannelGenerateBatchTextarea?.value || "";
@@ -370,15 +464,15 @@ export function bindModelChannelEventsSection(params) {
       return;
     }
     try {
-      const count = importBatchModelChannelGeneratorsAsCards(raw);
-      pushStatus("success", "Imported batch definitions", `Added ${count} cards.`);
+      const count = importBatchModelChannelGeneratorsAsRows(raw);
+      pushStatus("success", "Imported batch definitions", `Added ${count} rows.`);
     } catch (error) {
       pushStatus("error", "Import failed", error.message);
     }
   });
-  elements.clearModelChannelCardsButton?.addEventListener("click", () => {
-    clearModelChannelGenerateCards({ keepOneBlank: true });
-    pushStatus("info", "Cleared cards", "Kept one blank card.");
+  elements.clearModelChannelMultiRowsButton?.addEventListener("click", () => {
+    clearMultiUrlModelChannelRows();
+    pushStatus("info", "Cleared multi URL rows", "Multi URL mode is now empty.");
   });
   elements.modelChannelsTextarea?.addEventListener("input", () => {
     state.modelChannelEditorDirty = true;
@@ -390,6 +484,10 @@ export function bindModelChannelEventsSection(params) {
     void handleModelChannelGenerateSubmit();
   });
   elements.reloadModelChannelsButton?.addEventListener("click", () => {
+    if (!isAdminModeEnabled()) {
+      pushStatus("error", "Reload failed", "请先进入管理员模式。", "channels");
+      return;
+    }
     void loadModelChannelConfig({ announce: true })
       .then(() => renderAll())
       .catch((error) => {

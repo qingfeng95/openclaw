@@ -30,445 +30,451 @@
           <div id="tab-status-channels" class="tab-status-note hidden" data-tab-status="channels">本区暂无新状态。</div>
           <div id="tab-status-activity" class="tab-status-note hidden" data-tab-status="activity">本区暂无新状态。</div>
 
-      <section class="panel control-panel" data-tab-page="overview">
-        <div class="control-panel-grid">
-          <label class="field">
-            <span>API 地址</span>
-            <input id="api-base-input" type="text" spellcheck="false" />
-          </label>
-          <button id="apply-api-base-button" class="button button-primary" type="button">连接</button>
-          <label class="field">
-            <span>管理员口令</span>
-            <input id="admin-token-input" type="password" spellcheck="false" placeholder="输入后解锁管理员模式" />
-          </label>
-          <button id="enable-admin-mode-button" class="button" type="button">进入管理员模式</button>
-          <button id="clear-admin-mode-button" class="button" type="button">退出管理员模式</button>
-        </div>
-        <div class="inline-actions">
-          <button id="refresh-button" class="button" type="button">刷新</button>
-          <label class="toggle">
-            <input id="auto-refresh-checkbox" type="checkbox" />
-            <span>15 秒自动刷新</span>
-          </label>
-        </div>
-        <div class="control-panel-notes">
-          <p id="admin-mode-note" class="connection-note">当前未进入管理员模式。</p>
-          <p id="connection-note" class="connection-note">尚未加载数据。</p>
-        </div>
-      </section>
-
-      <section class="summary-grid" id="summary-grid" data-tab-page="overview"></section>
-
-      <section class="overview-grid" data-tab-page="overview">
-        <section class="panel overview-panel">
-          <div class="panel-header">
-            <div>
-              <p class="section-kicker">待处理</p>
-              <h2>需要优先处理的共享实例</h2>
+          <section class="panel control-panel" data-tab-page="overview">
+            <div class="control-panel-grid">
+              <label class="field">
+                <span>API 地址</span>
+                <input id="api-base-input" type="text" spellcheck="false" />
+              </label>
+              <button id="apply-api-base-button" class="button button-primary" type="button">连接</button>
+              <label class="field">
+                <span>管理员口令</span>
+                <input id="admin-token-input" type="password" spellcheck="false" placeholder="输入后解锁管理员模式" />
+              </label>
+              <button id="enable-admin-mode-button" class="button" type="button">进入管理员模式</button>
+              <button id="clear-admin-mode-button" class="button" type="button">退出管理员模式</button>
             </div>
-          </div>
-          <div id="watchlist-panel" class="watchlist-panel"></div>
-        </section>
-
-        <section class="panel overview-panel">
-          <div class="panel-header">
-            <div>
-              <p class="section-kicker">近期情况</p>
-              <h2>最近大家在共享实例上最常遇到什么</h2>
+            <div class="inline-actions">
+              <button id="refresh-button" class="button" type="button">刷新</button>
+              <label class="toggle">
+                <input id="auto-refresh-checkbox" type="checkbox" />
+                <span>15 秒自动刷新</span>
+              </label>
             </div>
-          </div>
-          <div id="hotspot-panel" class="hotspot-panel"></div>
-        </section>
-      </section>
-
-      <section class="panel containers-section" data-tab-page="containers">
-        <div class="panel-header">
-          <div>
-            <p class="section-kicker">容器总览</p>
-            <h2>当前被实例绑定的容器</h2>
-          </div>
-        </div>
-        <form id="create-container-form" class="form-grid">
-          <label class="field">
-            <span>容器名 / 前缀</span>
-            <input name="namePrefix" type="text" required placeholder="openclaw-worker" />
-          </label>
-          <label class="field">
-            <span>数量</span>
-            <input name="count" type="number" min="1" max="20" value="1" />
-          </label>
-          <label class="field">
-            <span>镜像</span>
-            <input name="image" type="text" value="node:22-bookworm-slim" />
-          </label>
-          <label class="field">
-            <span>容器启动命令</span>
-            <input name="command" type="text" placeholder="默认保持容器空转，供后续绑定实例" />
-          </label>
-          <div class="inline-actions">
-            <button class="button button-primary" type="submit">创建容器</button>
-          </div>
-        </form>
-        <div class="callout">
-          这里会创建带 OpenClaw 挂载和管理标签的预备容器。
-          数量大于 1 时，会按“容器名 / 前缀-序号”批量创建；创建好后，再到下方“新增实例”里选择“已有容器”并绑定容器名。
-        </div>
-        <div id="containers-panel" class="containers-panel"></div>
-        <div id="container-logs-panel" class="container-logs-panel empty-state" style="min-height: 180px;">
-          这里只展示已被实例绑定或声明过的容器。选一个容器查看最近日志，或对已绑定实例的容器执行启动、停止、重启。
-        </div>
-      </section>
-
-      <section class="panel" data-tab-page="channels">
-        <div class="panel-header">
-          <div>
-            <p class="section-kicker">模型渠道</p>
-            <h2>全局模型渠道与用户模型权限</h2>
-          </div>
-        </div>
-        <div id="model-channels-panel" class="callout">
-          进入管理员模式后，可在这里统一维护模型渠道 JSON；实例只做渠道映射，不再让用户自己配 provider / model。
-        </div>
-        <form id="model-channels-form" class="form-grid">
-          <label class="toggle" style="grid-column: 1 / -1;">
-            <input id="user-model-config-checkbox" type="checkbox" />
-            <span>允许用户自己配置模型与渠道</span>
-          </label>
-          <section class="detail-card model-generator-quick" style="grid-column: 1 / -1;">
-            <div class="detail-card-header">
-              <h3>快速生成（单渠道多 Key）</h3>
-            </div>
-            <div class="model-generator-grid">
-              <label class="field">
-                <span>渠道 URL</span>
-                <input
-                  id="model-channel-generate-base-url"
-                  type="text"
-                  spellcheck="false"
-                  placeholder="https://api.openai.com/v1"
-                />
-              </label>
-              <label class="field">
-                <span>API 类型</span>
-                <input
-                  id="model-channel-generate-api"
-                  type="text"
-                  spellcheck="false"
-                  value="openai-responses"
-                />
-              </label>
-              <label class="field">
-                <span>渠道 ID 前缀</span>
-                <input
-                  id="model-channel-generate-id-prefix"
-                  type="text"
-                  spellcheck="false"
-                  placeholder="openai-main"
-                />
-                <small class="field-note">留空时按 URL 主机名自动生成。</small>
-              </label>
-              <label class="field">
-                <span>渠道名称前缀</span>
-                <input
-                  id="model-channel-generate-name-prefix"
-                  type="text"
-                  spellcheck="false"
-                  placeholder="OpenAI Main"
-                />
-              </label>
-              <label class="field field-span-2">
-                <span>模型 ID（每行一个）</span>
-                <textarea
-                  id="model-channel-generate-models"
-                  rows="2"
-                  spellcheck="false"
-                  placeholder="gpt-5-mini"
-                ></textarea>
-              </label>
-              <label class="field field-span-2">
-                <span>API Key（每行一个）</span>
-                <textarea
-                  id="model-channel-generate-api-keys"
-                  rows="2"
-                  spellcheck="false"
-                  placeholder="sk-xxx"
-                ></textarea>
-                <small class="field-note">填多个 key 时可一并生成多个渠道和轮询组。</small>
-              </label>
+            <div class="control-panel-notes">
+              <p id="admin-mode-note" class="connection-note">当前未进入管理员模式。</p>
+              <p id="connection-note" class="connection-note">尚未加载数据。</p>
             </div>
           </section>
-          <section class="detail-card generator-card-collection" style="grid-column: 1 / -1;">
-            <div class="generator-card-header">
+
+          <section class="summary-grid" id="summary-grid" data-tab-page="overview"></section>
+
+          <section class="overview-grid" data-tab-page="overview">
+            <section class="panel overview-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="section-kicker">待处理</p>
+                  <h2>需要优先处理的共享实例</h2>
+                </div>
+              </div>
+              <div id="watchlist-panel" class="watchlist-panel"></div>
+            </section>
+
+            <section class="panel overview-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="section-kicker">近期情况</p>
+                  <h2>最近大家在共享实例上最常遇到什么</h2>
+                </div>
+              </div>
+              <div id="hotspot-panel" class="hotspot-panel"></div>
+            </section>
+          </section>
+
+          <section class="panel containers-section" data-tab-page="containers">
+            <div class="panel-header">
               <div>
-                <h3>多渠道卡片工作台</h3>
-                <p class="field-note">
-                  推荐用于多渠道、多 key 场景。可以先在上方“快速生成”里填默认值，再新增卡片逐个微调。
-                </p>
+                <p class="section-kicker">容器总览</p>
+                <h2>当前被实例绑定的容器</h2>
               </div>
+            </div>
+            <form id="create-container-form" class="form-grid">
+              <label class="field">
+                <span>容器名 / 前缀</span>
+                <input name="namePrefix" type="text" required placeholder="openclaw-worker" />
+              </label>
+              <label class="field">
+                <span>数量</span>
+                <input name="count" type="number" min="1" max="20" value="1" />
+              </label>
+              <label class="field">
+                <span>镜像</span>
+                <input name="image" type="text" value="node:22-bookworm-slim" />
+              </label>
+              <label class="field">
+                <span>容器启动命令</span>
+                <input name="command" type="text" placeholder="默认保持容器空转，供后续绑定实例" />
+              </label>
               <div class="inline-actions">
-                <button id="add-model-channel-generate-card-button" class="button" type="button">
-                  新增卡片
-                </button>
-                <button id="import-model-channel-batch-button" class="button" type="button">
-                  文本转卡片
-                </button>
-                <button id="clear-model-channel-cards-button" class="button" type="button">
-                  清空卡片
-                </button>
+                <button class="button button-primary" type="submit">创建容器</button>
               </div>
+            </form>
+            <div class="callout">
+              这里会创建带 OpenClaw 挂载和管理标签的预备容器。
+              数量大于 1 时，会按“容器名 / 前缀-序号”批量创建；创建好后，再到下方“新增实例”里选择“已有容器”并绑定容器名。
             </div>
-            <label class="field">
-              <span>兼容文本导入（可选）</span>
-              <textarea
-                id="model-channel-generate-batch-textarea"
-                rows="4"
-                spellcheck="false"
-                placeholder="OpenAI Main | openai-main | https://api.openai.com/v1 | gpt-5-mini | sk-a,sk-b"
-              ></textarea>
-              <small class="field-note">
-                格式：名称前缀 | ID 前缀 | URL | 模型1,模型2 | Key1,Key2 | API（可选）
-              </small>
-            </label>
-            <div id="model-channel-generate-cards" class="generator-cards"></div>
+            <div id="containers-panel" class="containers-panel"></div>
+            <div id="container-logs-panel" class="container-logs-panel empty-state" style="min-height: 180px;">
+              这里只展示已被实例绑定或声明过的容器。选一个容器查看最近日志，或对已绑定实例的容器执行启动、停止、重启。
+            </div>
           </section>
-          <div class="inline-actions" style="grid-column: 1 / -1;">
-            <label class="toggle">
-              <input id="model-channel-generate-reasoning" type="checkbox" checked />
-              <span>按推理模型生成</span>
-            </label>
-            <label class="toggle">
-              <input id="model-channel-generate-image-input" type="checkbox" />
-              <span>支持图片输入</span>
-            </label>
-            <label class="toggle">
-              <input id="model-channel-generate-round-robin" type="checkbox" checked />
-              <span>多个 key 时自动生成轮询组</span>
-            </label>
-          </div>
-          <div class="inline-actions">
-            <button id="generate-model-channels-button" class="button" type="button">生成 JSON 草稿</button>
-          </div>
-          <label class="field" style="grid-column: 1 / -1;">
-            <span>模型渠道 JSON</span>
-            <textarea
-              id="model-channels-textarea"
-              rows="18"
-              spellcheck="false"
-              placeholder='{"userCanConfigureModels":false,"channels":[]}'
-            ></textarea>
-          </label>
-          <label class="toggle" style="grid-column: 1 / -1;">
-            <input id="auto-unassign-removed-model-channels-checkbox" type="checkbox" checked />
-            <span>保存时自动解除已删除渠道的实例映射</span>
-          </label>
-          <div class="inline-actions">
-            <button id="reload-model-channels-button" class="button" type="button">重新加载</button>
-            <button id="save-model-channels-button" class="button button-primary" type="submit">保存全局渠道</button>
-          </div>
-        </form>
-      </section>
 
-      <main class="main-grid" data-tab-page="instances">
-        <section class="panel panel-list">
-          <div class="panel-header">
-            <div>
-              <p class="section-kicker">共享实例</p>
-              <h2>当前共享实例列表</h2>
-            </div>
-            <input
-              id="instance-filter-input"
-              class="search-input"
-              type="search"
-              placeholder="按实例 ID / 名称 / 版本筛选"
-            />
-          </div>
-          <div id="instances-list" class="instances-list"></div>
-        </section>
-
-        <section class="panel panel-detail">
-          <div class="panel-header">
-            <div>
-              <p class="section-kicker">实例详情</p>
-              <h2>当前实例详情</h2>
-            </div>
-            <span id="detail-badge" class="detail-badge">未选择实例</span>
-          </div>
-          <div id="detail-empty" class="empty-state">
-            从左侧选择实例，或先创建一个新的实例。
-          </div>
-          <div id="detail-content" class="detail-content hidden">
-            <section class="detail-card">
-              <div class="detail-card-header">
-                <h3 id="detail-title">-</h3>
-                <div class="inline-actions">
-                  <button id="open-ui-button" class="button" type="button">打开 UI</button>
-                  <button id="copy-ui-link-button" class="button" type="button">复制 UI 链接</button>
-                  <button id="refresh-pairing-button" class="button hidden" type="button">刷新配对</button>
-                  <button id="approve-latest-pairing-button" class="button hidden" type="button">批准最新配对</button>
-                  <button id="copy-login-guide-button" class="button hidden" type="button">复制登录说明</button>
-                  <button id="copy-token-button" class="button hidden" type="button">复制 Token</button>
-                  <button id="start-button" class="button button-primary" type="button">启动</button>
-                  <button id="stop-button" class="button" type="button">停止</button>
-                  <button id="restart-button" class="button" type="button">重启</button>
-                </div>
+          <section class="panel" data-tab-page="channels">
+            <div class="panel-header">
+              <div>
+                <p class="section-kicker">模型渠道</p>
+                <h2>全局模型渠道与用户模型权限</h2>
               </div>
-              <div id="detail-meta" class="meta-grid"></div>
+            </div>
+            <div id="model-channels-panel" class="channel-status-panel"></div>
+            <form id="model-channels-form" class="channel-workbench-form">
+              <div class="channel-workbench">
+                <div class="channel-workbench-main">
+                  <section class="detail-card channel-workbench-card">
+                    <div class="detail-card-header">
+                      <div>
+                        <h3>渠道生成模式</h3>
+                        <p class="field-note">这里不再混用“默认参数 + 卡片”。请先明确选择一种生成方式。</p>
+                      </div>
+                      <label class="toggle channel-inline-toggle">
+                        <input id="user-model-config-checkbox" type="checkbox" />
+                        <span>允许用户自己配置模型与渠道</span>
+                      </label>
+                    </div>
+                    <div class="channel-mode-switch" role="radiogroup" aria-label="渠道生成模式">
+                      <label class="channel-mode-option active">
+                        <input id="model-channel-generate-mode-single" type="radio" name="model-channel-generate-mode" value="single" checked />
+                        <span class="channel-mode-option-title">单 URL 多 key 多模型轮询</span>
+                        <span class="channel-mode-option-note">1 个 URL，填多个 key 和多个模型，直接生成渠道与可选轮询组。</span>
+                      </label>
+                      <label class="channel-mode-option">
+                        <input id="model-channel-generate-mode-multi" type="radio" name="model-channel-generate-mode" value="multi" />
+                        <span class="channel-mode-option-title">多 URL 多 key 多模型轮询</span>
+                        <span class="channel-mode-option-note">每个 URL 对应 1 个 key，共享一组模型，可在前端统一补出轮询组。</span>
+                      </label>
+                    </div>
+                    <div class="inline-actions channel-generator-options">
+                      <label class="toggle">
+                        <input id="model-channel-generate-reasoning" type="checkbox" checked />
+                        <span>按推理模型生成</span>
+                      </label>
+                      <label class="toggle">
+                        <input id="model-channel-generate-image-input" type="checkbox" />
+                        <span>支持图片输入</span>
+                      </label>
+                      <label class="toggle">
+                        <input id="model-channel-generate-round-robin" type="checkbox" checked />
+                        <span>生成统一轮询组</span>
+                      </label>
+                    </div>
+                  </section>
+
+                  <section id="model-channel-single-panel" class="detail-card model-generator-quick channel-workbench-card">
+                    <div class="detail-card-header">
+                      <div>
+                        <h3>单 URL 多 key 多模型轮询</h3>
+                        <p class="field-note">适合一个上游地址下挂多个 key。生成时会一次性生成渠道，并可自动创建轮询组。</p>
+                      </div>
+                    </div>
+                    <div class="model-generator-grid">
+                      <label class="field">
+                        <span>渠道 URL</span>
+                        <input id="model-channel-single-base-url" type="text" spellcheck="false" placeholder="https://api.openai.com/v1" />
+                      </label>
+                      <label class="field">
+                        <span>API 类型</span>
+                        <select id="model-channel-single-api">
+                          <option value="openai-responses" selected>openai-responses</option>
+                          <option value="openai-completions">/v1/chat/completions</option>
+                          <option value="anthropic-messages">Anthropic</option>
+                        </select>
+                      </label>
+                      <label class="field">
+                        <span>渠道 ID 前缀</span>
+                        <input id="model-channel-single-id-prefix" type="text" spellcheck="false" placeholder="openai-main" />
+                        <small class="field-note">留空时按 URL 主机名自动生成。</small>
+                      </label>
+                      <label class="field">
+                        <span>渠道名称前缀</span>
+                        <input id="model-channel-single-name-prefix" type="text" spellcheck="false" placeholder="OpenAI Main" />
+                      </label>
+                      <label class="field field-span-2">
+                        <span>模型 ID（每行一个）</span>
+                        <textarea id="model-channel-single-models" rows="3" spellcheck="false" placeholder="gpt-5-mini"></textarea>
+                      </label>
+                      <label class="field field-span-2">
+                        <span>API Key（每行一个）</span>
+                        <textarea id="model-channel-single-api-keys" rows="3" spellcheck="false" placeholder="sk-xxx"></textarea>
+                        <small class="field-note">填多个 key 时会生成多个渠道；勾选轮询组后会自动生成 round-robin group。</small>
+                      </label>
+                    </div>
+                  </section>
+
+                  <section id="model-channel-multi-panel" class="detail-card generator-card-collection channel-workbench-card hidden">
+                    <div class="generator-card-header">
+                      <div>
+                        <h3>多 URL 多 key 多模型轮询</h3>
+                        <p class="field-note">每一行对应 1 个 URL + 1 个 key，共享下面这一组模型。</p>
+                      </div>
+                      <div class="inline-actions">
+                        <button id="add-model-channel-multi-row-button" class="button" type="button">新增 URL 行</button>
+                        <button id="clear-model-channel-multi-rows-button" class="button" type="button">清空 URL 行</button>
+                      </div>
+                    </div>
+                    <div class="model-generator-grid channel-multi-shared-grid">
+                      <label class="field field-span-2">
+                        <span>共享模型 ID（每行一个）</span>
+                        <textarea id="model-channel-multi-models" rows="3" spellcheck="false" placeholder="gpt-5-mini"></textarea>
+                      </label>
+                      <label class="field">
+                        <span>轮询组 ID</span>
+                        <input id="model-channel-multi-group-id" type="text" spellcheck="false" placeholder="openai-global-rr" />
+                      </label>
+                      <label class="field">
+                        <span>轮询组名称</span>
+                        <input id="model-channel-multi-group-name" type="text" spellcheck="false" placeholder="OpenAI Global RR" />
+                      </label>
+                    </div>
+                    <details class="channel-import-panel">
+                      <summary>兼容文本导入（低频入口）</summary>
+                      <div class="channel-import-panel-body">
+                        <label class="field">
+                          <span>批量导入文本</span>
+                          <textarea id="model-channel-generate-batch-textarea" rows="4" spellcheck="false" placeholder="OpenAI HK | openai-hk | https://hk.example/v1 | gpt-5-mini | sk-hk"></textarea>
+                          <small class="field-note">格式：名称前缀 | ID 前缀 | URL | 模型1,模型2 | 单个 Key | API（可选）</small>
+                        </label>
+                        <div class="inline-actions">
+                          <button id="import-model-channel-batch-button" class="button" type="button">文本转 URL 行</button>
+                        </div>
+                      </div>
+                    </details>
+                    <div id="model-channel-multi-rows-empty-state" class="empty-state channel-multi-empty-state">
+                      还没有 URL 行。点击“新增 URL 行”，或用上面的文本导入快速填充。
+                    </div>
+                    <div id="model-channel-multi-rows" class="generator-cards"></div>
+                  </section>
+                </div>
+
+                <aside class="channel-workbench-side">
+                  <section class="detail-card channel-draft-card">
+                    <div class="detail-card-header">
+                      <div>
+                        <h3>当前 JSON 草稿</h3>
+                        <p class="field-note">左侧生成后，在这里检查最终草稿，再决定是否保存到全局渠道配置。</p>
+                      </div>
+                    </div>
+                    <label class="field">
+                      <span>模型渠道 JSON</span>
+                      <textarea id="model-channels-textarea" rows="18" spellcheck="false" placeholder='{"userCanConfigureModels":false,"channels":[]}'></textarea>
+                    </label>
+                    <div class="callout channel-draft-note">
+                      JSON 是最终权威草稿。左侧选择模式并生成后，这里会立即更新；确认无误后再保存。
+                    </div>
+                    <div class="inline-actions">
+                      <button id="generate-model-channels-button" class="button" type="button">生成 JSON 草稿</button>
+                      <button id="reload-model-channels-button" class="button" type="button">重新加载</button>
+                    </div>
+                    <label class="toggle">
+                      <input id="auto-unassign-removed-model-channels-checkbox" type="checkbox" checked />
+                      <span>保存时自动解除已删除渠道的实例映射</span>
+                    </label>
+                    <div class="inline-actions">
+                      <button id="save-model-channels-button" class="button button-primary" type="submit">保存全局渠道</button>
+                    </div>
+                  </section>
+                </aside>
+              </div>
+            </form>
+          </section>
+
+          <main class="main-grid" data-tab-page="instances">
+            <section class="panel panel-list">
+              <div class="panel-header">
+                <div>
+                  <p class="section-kicker">共享实例</p>
+                  <h2>当前共享实例列表</h2>
+                </div>
+                <input id="instance-filter-input" class="search-input" type="search" placeholder="按实例 ID / 名称 / 版本筛选" />
+              </div>
+              <div id="instances-list" class="instances-list"></div>
             </section>
 
-            <section class="detail-card">
-              <div class="detail-card-header">
-                <h3>模型渠道映射</h3>
+            <section class="panel panel-detail">
+              <div class="panel-header">
+                <div>
+                  <p class="section-kicker">实例详情</p>
+                  <h2>当前实例详情</h2>
+                </div>
+                <span id="detail-badge" class="detail-badge">未选择实例</span>
               </div>
-              <form id="detail-model-channel-form" class="form-grid">
+              <div id="detail-empty" class="empty-state">从左侧选择实例，或先创建一个新的实例。</div>
+              <div id="detail-content" class="detail-content hidden">
+                <section class="detail-card">
+                  <div class="detail-card-header">
+                    <h3 id="detail-title">-</h3>
+                    <div class="inline-actions">
+                      <button id="open-ui-button" class="button" type="button">打开 UI</button>
+                      <button id="copy-ui-link-button" class="button" type="button">复制 UI 链接</button>
+                      <button id="refresh-pairing-button" class="button hidden" type="button">刷新配对</button>
+                      <button id="approve-latest-pairing-button" class="button hidden" type="button">批准最新配对</button>
+                      <button id="copy-login-guide-button" class="button hidden" type="button">复制登录说明</button>
+                      <button id="copy-token-button" class="button hidden" type="button">复制 Token</button>
+                      <button id="start-button" class="button button-primary" type="button">启动</button>
+                      <button id="stop-button" class="button" type="button">停止</button>
+                      <button id="restart-button" class="button" type="button">重启</button>
+                    </div>
+                  </div>
+                  <div id="detail-meta" class="meta-grid"></div>
+                </section>
+
+                <section class="detail-card">
+                  <div class="detail-card-header">
+                    <h3>模型渠道映射</h3>
+                  </div>
+                  <form id="detail-model-channel-form" class="form-grid">
+                    <label class="field">
+                      <span>当前渠道</span>
+                      <select id="detail-model-channel-select" name="modelChannelId"></select>
+                    </label>
+                    <div class="inline-actions">
+                      <button id="clear-detail-model-channel-button" class="button" type="button">解除映射</button>
+                      <button id="save-detail-model-channel-button" class="button button-primary" type="submit">保存渠道映射</button>
+                    </div>
+                  </form>
+                </section>
+
+                <section class="detail-card">
+                  <div class="detail-card-header">
+                    <h3>实例改名</h3>
+                  </div>
+                  <form id="rename-form" class="form-grid">
+                    <label class="field">
+                      <span>显示名称</span>
+                      <input id="rename-input" name="name" type="text" required />
+                    </label>
+                    <div class="inline-actions">
+                      <button class="button button-primary" type="submit">保存名称</button>
+                    </div>
+                  </form>
+                </section>
+
+                <section class="detail-card">
+                  <div class="detail-card-header">
+                    <h3>设备配对</h3>
+                  </div>
+                  <div id="pairing-summary" class="usage-summary"></div>
+                </section>
+
+                <section class="detail-card">
+                  <div class="detail-card-header">
+                    <h3>值班检查结果</h3>
+                  </div>
+                  <div id="probe-grid" class="probe-grid"></div>
+                </section>
+
+                <section class="detail-card">
+                  <div class="detail-card-header">
+                    <h3>最近使用概况</h3>
+                  </div>
+                  <div id="usage-summary" class="usage-summary"></div>
+                </section>
+              </div>
+            </section>
+
+            <section class="panel panel-create">
+              <div class="panel-header">
+                <div>
+                  <p class="section-kicker">新增实例</p>
+                  <h2>新增共享实例 / 单独实例</h2>
+                </div>
+              </div>
+              <form id="create-form" class="form-grid">
                 <label class="field">
-                  <span>当前渠道</span>
-                  <select id="detail-model-channel-select" name="modelChannelId"></select>
+                  <span>实例类型</span>
+                  <select id="create-pool-select" name="pool">
+                    <option value="shared">共享实例</option>
+                    <option value="dedicated">单独实例</option>
+                  </select>
                 </label>
-                <div class="inline-actions">
-                  <button id="clear-detail-model-channel-button" class="button" type="button">
-                    解除映射
-                  </button>
-                  <button id="save-detail-model-channel-button" class="button button-primary" type="submit">
-                    保存渠道映射
-                  </button>
-                </div>
-              </form>
-            </section>
-
-            <section class="detail-card">
-              <div class="detail-card-header">
-                <h3>实例改名</h3>
-              </div>
-              <form id="rename-form" class="form-grid">
+                <label class="field">
+                  <span>部署位置</span>
+                  <select id="create-runtime-kind-select" name="runtimeKind">
+                    <option value="container" selected>已有容器</option>
+                    <option value="host">宿主机运行</option>
+                  </select>
+                  <small id="create-runtime-kind-note" class="field-note">共享实例固定运行在已有容器里；单独实例可按需选择容器或宿主机。</small>
+                </label>
+                <label class="field">
+                  <span>实例 ID</span>
+                  <input name="id" type="text" required placeholder="shared-a / solo-a" />
+                </label>
                 <label class="field">
                   <span>显示名称</span>
-                  <input id="rename-input" name="name" type="text" required />
+                  <input name="name" type="text" placeholder="共享实例 A / 单间虾 A" />
+                </label>
+                <label class="field">
+                  <span>端口</span>
+                  <input name="port" type="number" min="1" max="65535" placeholder="18840" />
+                </label>
+                <label class="field">
+                  <span>运行档案名</span>
+                  <input name="profile" type="text" placeholder="shared-alpha / dedicated-alpha" />
+                </label>
+                <label class="field">
+                  <span>实例模板</span>
+                  <input name="template" type="text" placeholder="shared-instance.internal-test.yaml" />
+                </label>
+                <label class="field">
+                  <span>模型渠道</span>
+                  <select id="create-model-channel-select" name="modelChannelId"></select>
+                </label>
+                <label class="field">
+                  <span>监听地址</span>
+                  <input name="bind" type="text" placeholder="loopback / lan / tailnet / auto / custom" />
+                  <small class="field-note">输入 127.0.0.1 或 localhost 会自动转换为 loopback。</small>
+                </label>
+                <label class="field">
+                  <span>目标容器名</span>
+                  <input name="containerName" type="text" list="container-name-options" placeholder="openclaw-worker-1" />
+                </label>
+                <datalist id="container-name-options"></datalist>
+                <label class="field">
+                  <span>目标容器 ID</span>
+                  <input name="containerId" type="text" placeholder="可选，容器名填了通常就够了" />
                 </label>
                 <div class="inline-actions">
-                  <button class="button button-primary" type="submit">保存名称</button>
+                  <button class="button button-primary" type="submit">创建实例</button>
+                  <button id="create-reset-button" class="button" type="reset">清空</button>
                 </div>
               </form>
-            </section>
-
-            <section class="detail-card">
-              <div class="detail-card-header">
-                <h3>设备配对</h3>
+              <div class="callout">
+                共享实例的产品语义是多个实例共享同一个容器资源，因此共享实例固定走“已有容器”。
+                正确顺序是：先在上面的“创建容器”区域预创建容器，再在这里绑定到目标容器名。
+                目标容器名称输入框会列出当前已发现的容器。
+                这类实例不会按宿主机方式启动，后续会通过容器侧链路接管。
               </div>
-              <div id="pairing-summary" class="usage-summary"></div>
             </section>
+          </main>
 
-            <section class="detail-card">
-              <div class="detail-card-header">
-                <h3>值班检查结果</h3>
+          <section class="panel dedicated-section" data-tab-page="instances">
+            <div class="panel-header">
+              <div>
+                <p class="section-kicker">单独实例</p>
+                <h2>当前单独实例（单间虾）列表</h2>
               </div>
-              <div id="probe-grid" class="probe-grid"></div>
-            </section>
-
-            <section class="detail-card">
-              <div class="detail-card-header">
-                <h3>最近使用概况</h3>
-              </div>
-              <div id="usage-summary" class="usage-summary"></div>
-            </section>
-          </div>
-        </section>
-
-        <section class="panel panel-create">
-          <div class="panel-header">
-            <div>
-              <p class="section-kicker">新增实例</p>
-              <h2>新增共享实例 / 单独实例</h2>
             </div>
-          </div>
-          <form id="create-form" class="form-grid">
-            <label class="field">
-              <span>实例类型</span>
-              <select id="create-pool-select" name="pool">
-                <option value="shared">共享实例</option>
-                <option value="dedicated">单独实例</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>部署位置</span>
-              <select id="create-runtime-kind-select" name="runtimeKind">
-                <option value="container" selected>已有容器</option>
-                <option value="host">宿主机运行</option>
-              </select>
-              <small id="create-runtime-kind-note" class="field-note">
-                共享实例固定运行在已有容器里；单独实例可按需选择容器或宿主机。
-              </small>
-            </label>
-            <label class="field">
-              <span>实例 ID</span>
-              <input name="id" type="text" required placeholder="shared-a / solo-a" />
-            </label>
-            <label class="field">
-              <span>显示名称</span>
-              <input name="name" type="text" placeholder="共享实例 A / 单间虾 A" />
-            </label>
-            <label class="field">
-              <span>端口</span>
-              <input name="port" type="number" min="1" max="65535" placeholder="18840" />
-            </label>
-            <label class="field">
-              <span>运行档案名</span>
-              <input name="profile" type="text" placeholder="shared-alpha / dedicated-alpha" />
-            </label>
-            <label class="field">
-              <span>实例模板</span>
-              <input name="template" type="text" placeholder="shared-instance.internal-test.yaml" />
-            </label>
-            <label class="field">
-              <span>模型渠道</span>
-              <select id="create-model-channel-select" name="modelChannelId"></select>
-            </label>
-            <label class="field">
-              <span>监听地址</span>
-              <input name="bind" type="text" placeholder="loopback / lan / tailnet / auto / custom" />
-              <small class="field-note">输入 127.0.0.1 或 localhost 会自动转换为 loopback。</small>
-            </label>
-            <label class="field">
-              <span>目标容器名</span>
-              <input name="containerName" type="text" list="container-name-options" placeholder="openclaw-worker-1" />
-            </label>
-            <datalist id="container-name-options"></datalist>
-            <label class="field">
-              <span>目标容器 ID</span>
-              <input name="containerId" type="text" placeholder="可选，容器名填了通常就够了" />
-            </label>
-            <div class="inline-actions">
-              <button class="button button-primary" type="submit">创建实例</button>
-              <button id="create-reset-button" class="button" type="reset">清空</button>
+            <div id="dedicated-instances-list" class="instances-list"></div>
+          </section>
+
+          <section class="status-panel" data-tab-page="activity">
+            <div class="panel-header">
+              <div>
+                <p class="section-kicker">最近动态</p>
+                <h2>最近操作记录</h2>
+              </div>
             </div>
-          </form>
-          <div class="callout">
-            共享实例的产品语义是多个实例共享同一个容器资源，因此共享实例固定走“已有容器”。
-            正确顺序是：先在上面的“创建容器”区域预创建容器，再在这里绑定到目标容器名。
-            目标容器名称输入框会列出当前已发现的容器。
-            这类实例不会按宿主机方式启动，后续会通过容器侧链路接管。
-          </div>
-        </section>
-      </main>
-
-      <section class="panel dedicated-section" data-tab-page="instances">
-        <div class="panel-header">
-          <div>
-            <p class="section-kicker">单独实例</p>
-            <h2>当前单独实例（单间虾）列表</h2>
-          </div>
-        </div>
-        <div id="dedicated-instances-list" class="instances-list"></div>
-      </section>
-
-      <section class="status-panel" data-tab-page="activity">
-        <div class="panel-header">
-          <div>
-            <p class="section-kicker">最近动态</p>
-            <h2>最近操作记录</h2>
-          </div>
-        </div>
-        <div id="status-feed" class="status-feed"></div>
-      </section>
+            <div id="status-feed" class="status-feed"></div>
+          </section>
         </div>
       </div>
     </div>

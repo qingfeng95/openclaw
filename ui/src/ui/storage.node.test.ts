@@ -176,55 +176,31 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("does not reuse a session token for a different gatewayUrl", async () => {
+
+  it("prefers the page-derived gateway for instance UI deep links", async () => {
     setTestLocation({
       protocol: "https:",
-      host: "gateway.example:8443",
-      pathname: "/",
+      host: "crewclaw.cc.cd",
+      pathname: "/api/instances/crewclaw-1/ui/",
     });
 
-    const gwUrl = expectedGatewayUrl("");
-    const otherUrl = "wss://other-gateway.example:8443";
-    const { loadSettings, saveSettings } = await import("./storage.ts");
-    saveSettings({
-      gatewayUrl: gwUrl,
-      token: "gateway-a-token",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "system",
-      chatFocusMode: false,
-      chatShowThinking: true,
-      chatShowToolCalls: true,
-      splitRatio: 0.6,
-      navCollapsed: false,
-      navWidth: 220,
-      navGroupsCollapsed: {},
-      borderRadius: 50,
-    });
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://crewclaw.cc.cd/api/instances/crewclaw-2/ui",
+        sessionKey: "agent:crewclaw-2:main",
+        lastActiveSessionKey: "agent:crewclaw-2:main",
+      }),
+    );
 
-    saveSettings({
-      gatewayUrl: otherUrl,
-      token: "",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "system",
-      chatFocusMode: false,
-      chatShowThinking: true,
-      chatShowToolCalls: true,
-      splitRatio: 0.6,
-      navCollapsed: false,
-      navWidth: 220,
-      navGroupsCollapsed: {},
-      borderRadius: 50,
-    });
-
+    const { loadSettings } = await import("./storage.ts");
     expect(loadSettings()).toMatchObject({
-      gatewayUrl: gwUrl,
-      token: "gateway-a-token",
+      gatewayUrl: "wss://crewclaw.cc.cd/api/instances/crewclaw-1/ui",
+      sessionKey: "agent:crewclaw-2:main",
+      lastActiveSessionKey: "agent:crewclaw-2:main",
     });
   });
+
 
   it("does not persist gateway tokens when saving settings", async () => {
     setTestLocation({

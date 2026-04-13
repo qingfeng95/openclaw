@@ -55,4 +55,43 @@ describe("chat-model-select-state", () => {
     expect(resolved.options.map((option) => option.value)).toContain("openai/gpt-5-mini");
     expect(resolved.options.map((option) => option.value)).not.toContain("gpt-5-mini");
   });
+
+  it("does not reintroduce stale current or default models once the catalog is loaded", () => {
+    const state = {
+      sessionKey: "main",
+      chatModelOverrides: {},
+      chatModelCatalog: createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG),
+      sessionsResult: createSessionsListResult({
+        model: "deleted-model",
+        modelProvider: "removed-provider",
+        defaultsModel: "old-default",
+        defaultsProvider: "removed-provider",
+      }),
+    };
+
+    const resolved = resolveChatModelSelectState(state);
+    const optionValues = resolved.options.map((option) => option.value);
+    expect(resolved.currentOverride).toBe("removed-provider/deleted-model");
+    expect(resolved.defaultModel).toBe("removed-provider/old-default");
+    expect(optionValues).not.toContain("removed-provider/deleted-model");
+    expect(optionValues).not.toContain("removed-provider/old-default");
+  });
+
+  it("keeps fallback options while the catalog is still unavailable", () => {
+    const state = {
+      sessionKey: "main",
+      chatModelOverrides: {},
+      chatModelCatalog: [],
+      sessionsResult: createSessionsListResult({
+        model: "gpt-5-mini",
+        modelProvider: "openai",
+      }),
+    };
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.options.map((option) => option.value)).toEqual([
+      "openai/gpt-5-mini",
+      "openai/gpt-5",
+    ]);
+  });
 });

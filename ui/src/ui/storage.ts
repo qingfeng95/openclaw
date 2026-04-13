@@ -71,7 +71,15 @@ function formatHostWithPort(hostname: string, port: string): string {
   return `${normalizedHost}:${port}`;
 }
 
-function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
+function isInstanceUiBasePath(basePath: string): boolean {
+  return /^\/api\/instances\/[^/]+\/ui$/i.test(normalizeBasePath(basePath));
+}
+
+function deriveDefaultGatewayUrl(): {
+  pageUrl: string;
+  effectiveUrl: string;
+  preferPageGateway: boolean;
+} {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const configured =
     typeof window !== "undefined" &&
@@ -81,11 +89,12 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
     ? normalizeBasePath(configured)
     : inferBasePathFromPathname(location.pathname);
   const pageUrl = `${proto}://${location.host}${basePath}`;
+  const preferPageGateway = isInstanceUiBasePath(basePath);
   if (!isViteDevPage()) {
-    return { pageUrl, effectiveUrl: pageUrl };
+    return { pageUrl, effectiveUrl: pageUrl, preferPageGateway };
   }
   const effectiveUrl = `${proto}://${formatHostWithPort(location.hostname, "18789")}`;
-  return { pageUrl, effectiveUrl };
+  return { pageUrl, effectiveUrl, preferPageGateway };
 }
 
 function getSessionStorage(): Storage | null {
@@ -190,7 +199,8 @@ function persistSessionToken(gatewayUrl: string, token: string) {
 }
 
 export function loadSettings(): UiSettings {
-  const { pageUrl: pageDerivedUrl, effectiveUrl: defaultUrl } = deriveDefaultGatewayUrl();
+  const { pageUrl: pageDerivedUrl, effectiveUrl: defaultUrl, preferPageGateway } =
+    deriveDefaultGatewayUrl();
   const storage = getSafeLocalStorage();
 
   const defaults: UiSettings = {
@@ -225,7 +235,11 @@ export function loadSettings(): UiSettings {
       typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
         ? parsed.gatewayUrl.trim()
         : defaults.gatewayUrl;
-    const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl;
+    const gatewayUrl = preferPageGateway
+      ? defaultUrl
+      : parsedGatewayUrl === pageDerivedUrl
+        ? defaultUrl
+        : parsedGatewayUrl;
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const { theme, mode } = parseThemeSelection(
       (parsed as { theme?: unknown }).theme,

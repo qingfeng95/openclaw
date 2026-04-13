@@ -79,11 +79,13 @@ function buildChatModelOptions(
     addOption(option.value, option.label);
   }
 
-  if (currentOverride) {
-    addOption(currentOverride);
-  }
-  if (defaultModel) {
-    addOption(defaultModel);
+  if (catalog.length === 0) {
+    if (currentOverride) {
+      addOption(currentOverride);
+    }
+    if (defaultModel) {
+      addOption(defaultModel);
+    }
   }
   return options;
 }

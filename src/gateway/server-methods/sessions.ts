@@ -45,6 +45,7 @@ import {
   validateSessionsResetParams,
   validateSessionsResolveParams,
   validateSessionsSendParams,
+  validateSessionsSetModelParams,
 } from "../protocol/index.js";
 import {
   archiveSessionTranscriptsForSession,
@@ -904,6 +905,72 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       const hookContext: SessionPatchHookContext = structuredClone({
         sessionEntry: applied.entry,
         patch: p,
+        cfg,
+      });
+      const hookEvent: SessionPatchHookEvent = {
+        type: "session",
+        action: "patch",
+        sessionKey: target.canonicalKey ?? key,
+        context: hookContext,
+        timestamp: new Date(),
+        messages: [],
+      };
+      void triggerInternalHook(hookEvent);
+    }
+
+    const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
+    const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
+    const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
+    const result: SessionsPatchResult = {
+      ok: true,
+      path: storePath,
+      key: target.canonicalKey,
+      entry: applied.entry,
+      resolved: {
+        modelProvider: resolved.provider,
+        model: resolved.model,
+      },
+    };
+    respond(true, result, undefined);
+    emitSessionsChanged(context, {
+      sessionKey: target.canonicalKey,
+      reason: "patch",
+    });
+  },
+  "sessions.setModel": async ({ params, respond, context, client, isWebchatConnect }) => {
+    if (!assertValidParams(params, validateSessionsSetModelParams, "sessions.setModel", respond)) {
+      return;
+    }
+    const p = params;
+    const key = requireSessionKey(p.key, respond);
+    if (!key) {
+      return;
+    }
+    if (rejectWebchatSessionMutation({ action: "patch", client, isWebchatConnect, respond })) {
+      return;
+    }
+
+    const patch = { key: p.key, model: p.model };
+    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
+    const applied = await updateSessionStore(storePath, async (store) => {
+      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
+      return await applySessionsPatchToStore({
+        cfg,
+        store,
+        storeKey: primaryKey,
+        patch,
+        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+      });
+    });
+    if (!applied.ok) {
+      respond(false, undefined, applied.error);
+      return;
+    }
+
+    if (hasInternalHookListeners("session", "patch")) {
+      const hookContext: SessionPatchHookContext = structuredClone({
+        sessionEntry: applied.entry,
+        patch,
         cfg,
       });
       const hookEvent: SessionPatchHookEvent = {

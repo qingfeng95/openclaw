@@ -65,6 +65,7 @@ const BASE_METHODS = [
   "sessions.send",
   "sessions.abort",
   "sessions.patch",
+  "sessions.setModel",
   "sessions.reset",
   "sessions.delete",
   "sessions.compact",

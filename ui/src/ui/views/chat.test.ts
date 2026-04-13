@@ -41,7 +41,7 @@ function createChatHeaderState(
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
   const catalog = overrides.models ?? createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG);
   const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
-    if (method === "sessions.patch") {
+    if (method === "sessions.setModel") {
       const nextModel = (params.model as string | null | undefined) ?? null;
       if (!nextModel) {
         currentModel = null;
@@ -809,7 +809,7 @@ describe("chat view", () => {
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
     await flushTasks();
 
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
+    expect(request).toHaveBeenCalledWith("sessions.setModel", {
       key: "main",
       model: "openai/gpt-5-mini",
     });
@@ -876,7 +876,7 @@ describe("chat view", () => {
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
     await flushTasks();
 
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
+    expect(request).toHaveBeenCalledWith("sessions.setModel", {
       key: "main",
       model: null,
     });

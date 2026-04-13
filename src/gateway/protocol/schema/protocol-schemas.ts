@@ -156,6 +156,7 @@ import {
   SessionsResetParamsSchema,
   SessionsResolveParamsSchema,
   SessionsSendParamsSchema,
+  SessionsSetModelParamsSchema,
   SessionsUsageParamsSchema,
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
@@ -221,6 +222,7 @@ export const ProtocolSchemas = {
   SessionsMessagesUnsubscribeParams: SessionsMessagesUnsubscribeParamsSchema,
   SessionsAbortParams: SessionsAbortParamsSchema,
   SessionsPatchParams: SessionsPatchParamsSchema,
+  SessionsSetModelParams: SessionsSetModelParamsSchema,
   SessionsResetParams: SessionsResetParamsSchema,
   SessionsDeleteParams: SessionsDeleteParamsSchema,
   SessionsCompactParams: SessionsCompactParamsSchema,

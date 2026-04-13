@@ -854,7 +854,7 @@ describe("gateway server sessions", () => {
         modelProvider?: string;
       };
       resolved?: { model?: string; modelProvider?: string };
-    }>(ws, "sessions.patch", {
+    }>(ws, "sessions.setModel", {
       key: "agent:main:main",
       model: "openai/gpt-test-a",
     });
@@ -938,6 +938,41 @@ describe("gateway server sessions", () => {
     expect(badThinking.ok).toBe(false);
     expect((badThinking.error as { message?: unknown } | undefined)?.message ?? "").toMatch(
       /invalid thinkinglevel/i,
+    );
+
+    ws.close();
+  });
+
+  test("sessions.setModel allows operator.write while sessions.patch stays admin-only", async () => {
+    await seedActiveMainSession();
+    piSdkMock.enabled = true;
+    piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+
+    const { ws } = await openClient({ scopes: ["operator.write"] });
+    const modelSet = await rpcReq<{
+      ok: true;
+      entry: {
+        modelOverride?: string;
+        providerOverride?: string;
+      };
+      resolved?: { model?: string; modelProvider?: string };
+    }>(ws, "sessions.setModel", {
+      key: "agent:main:main",
+      model: "openai/gpt-test-a",
+    });
+    expect(modelSet.ok).toBe(true);
+    expect(modelSet.payload?.entry.modelOverride).toBe("gpt-test-a");
+    expect(modelSet.payload?.entry.providerOverride).toBe("openai");
+    expect(modelSet.payload?.resolved?.modelProvider).toBe("openai");
+    expect(modelSet.payload?.resolved?.model).toBe("gpt-test-a");
+
+    const modelPatchDenied = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      model: "openai/gpt-test-a",
+    });
+    expect(modelPatchDenied.ok).toBe(false);
+    expect((modelPatchDenied.error as { message?: unknown } | undefined)?.message ?? "").toMatch(
+      /missing scope:\s*operator\.admin/i,
     );
 
     ws.close();

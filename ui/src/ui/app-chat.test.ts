@@ -107,7 +107,7 @@ describe("handleSendChat", () => {
       }) as unknown as typeof fetch,
     );
     const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "sessions.patch") {
+      if (method === "sessions.setModel") {
         return {
           ok: true,
           key: "main",
@@ -146,7 +146,7 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
+    expect(request).toHaveBeenCalledWith("sessions.setModel", {
       key: "main",
       model: "gpt-5-mini",
     });
@@ -162,3 +162,4 @@ afterAll(() => {
   vi.doUnmock("./app-settings.ts");
   vi.resetModules();
 });
+

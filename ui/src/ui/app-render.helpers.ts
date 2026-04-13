@@ -568,7 +568,7 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
     [targetSessionKey]: createChatModelOverride(nextModel),
   };
   try {
-    await state.client.request("sessions.patch", {
+    await state.client.request("sessions.setModel", {
       key: targetSessionKey,
       model: nextModel || null,
     });

@@ -14,6 +14,7 @@ describe("method scope resolution", () => {
     ["sessions.create", ["operator.write"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
+    ["sessions.setModel", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
     ["poll", ["operator.write"]],
@@ -39,6 +40,7 @@ describe("operator scope authorization", () => {
     ["health", ["operator.write"], { allowed: true }],
     ["config.schema.lookup", ["operator.read"], { allowed: true }],
     ["config.patch", ["operator.admin"], { allowed: true }],
+    ["sessions.setModel", ["operator.write"], { allowed: true }],
   ])("authorizes %s for scopes %j", (method, scopes, expected) => {
     expect(authorizeOperatorScopesForMethod(method, scopes)).toEqual(expected);
   });
@@ -85,3 +87,4 @@ describe("core gateway method classification", () => {
     expect(unclassified).toEqual([]);
   });
 });
+

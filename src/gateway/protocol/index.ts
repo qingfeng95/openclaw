@@ -1,5 +1,6 @@
 import AjvPkg, { type ErrorObject } from "ajv";
 import type { SessionsPatchResult } from "../session-utils.types.js";
+import type { SessionsSetModelParams } from "./schema/types.js";
 import {
   type AgentEvent,
   AgentEventSchema,
@@ -214,6 +215,7 @@ import {
   SessionsResolveParamsSchema,
   type SessionsSendParams,
   SessionsSendParamsSchema,
+  SessionsSetModelParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
   type ShutdownEvent,
@@ -354,6 +356,8 @@ export const validateSessionsAbortParams =
   ajv.compile<SessionsAbortParams>(SessionsAbortParamsSchema);
 export const validateSessionsPatchParams =
   ajv.compile<SessionsPatchParams>(SessionsPatchParamsSchema);
+export const validateSessionsSetModelParams =
+  ajv.compile<SessionsSetModelParams>(SessionsSetModelParamsSchema);
 export const validateSessionsResetParams =
   ajv.compile<SessionsResetParams>(SessionsResetParamsSchema);
 export const validateSessionsDeleteParams = ajv.compile<SessionsDeleteParams>(
@@ -530,6 +534,7 @@ export {
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
+  SessionsSetModelParamsSchema,
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
@@ -691,6 +696,7 @@ export type {
   SessionsPreviewParams,
   SessionsResolveParams,
   SessionsPatchParams,
+  SessionsSetModelParams,
   SessionsPatchResult,
   SessionsResetParams,
   SessionsDeleteParams,

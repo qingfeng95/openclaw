@@ -159,7 +159,7 @@ async function executeModel(
 
   try {
     const [patched, resolvedModelCatalog] = await Promise.all([
-      client.request<SessionsPatchResult>("sessions.patch", {
+      client.request<SessionsPatchResult>("sessions.setModel", {
         key: sessionKey,
         model: args.trim(),
       }),

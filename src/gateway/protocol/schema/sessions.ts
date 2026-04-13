@@ -137,6 +137,14 @@ export const SessionsPatchParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsSetModelParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    model: Type.Union([NonEmptyString, Type.Null()]),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsResetParamsSchema = Type.Object(
   {
     key: NonEmptyString,

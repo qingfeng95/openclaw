@@ -63,7 +63,7 @@ export function renderPairingSummarySection(params) {
       : `<p class="connection-note">当前还没有已配对设备。</p>`;
 
   elements.pairingSummary.innerHTML = `
-    <section class="detail-card" style="grid-column: 1 / -1;">
+    <section class="detail-card detail-card-span-2">
       <div class="detail-card-header">
         <h3>配对总览</h3>
         <div class="inline-actions">

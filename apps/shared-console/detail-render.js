@@ -1,12 +1,12 @@
 export function buildDiagnosticsNoteSection({ state, item, escapeHtml, formatRelativeTime }) {
   if (state.selectedDiagnosticsLoading) {
-    return `<p class="connection-note">Loading diagnostics...</p>`;
+    return `<p class="connection-note detail-inline-note">Loading diagnostics...</p>`;
   }
   if (item?.probe?.checkedAt) {
-    return `<p class="connection-note">Diagnostics updated ${escapeHtml(formatRelativeTime(item.probe.checkedAt))}</p>`;
+    return `<p class="connection-note detail-inline-note">Diagnostics updated ${escapeHtml(formatRelativeTime(item.probe.checkedAt))}</p>`;
   }
   if (item?.probe?.error) {
-    return `<p class="connection-note">Diagnostics degraded: ${escapeHtml(item.probe.error)}</p>`;
+    return `<p class="connection-note detail-inline-note">Diagnostics degraded: ${escapeHtml(item.probe.error)}</p>`;
   }
   return "";
 }
@@ -23,7 +23,7 @@ export function renderProbeGridSection(params) {
   const diagnosticsNote = buildDiagnosticsNote(item);
   if (state.selectedDiagnosticsLoading) {
     elements.probeGrid.innerHTML = `
-      <div class="empty-state" style="min-height: 180px; grid-column: 1 / -1;">
+      <div class="empty-state empty-state-compact grid-span-full">
         <p>Loading diagnostics for this instance...</p>
         ${diagnosticsNote}
       </div>`;
@@ -31,7 +31,7 @@ export function renderProbeGridSection(params) {
   }
   if (!item.probe) {
     elements.probeGrid.innerHTML =
-      '<div class="empty-state" style="min-height: 180px; grid-column: 1 / -1;">当前还没有检查结果。可以先刷新，或确认这个实例已经启动。</div>';
+      '<div class="empty-state empty-state-compact grid-span-full">当前还没有检查结果。可以先刷新，或确认这个实例已经启动。</div>';
     return;
   }
 
@@ -90,7 +90,7 @@ export function renderUsageSummarySection(params) {
   const diagnosticsNote = buildDiagnosticsNote(item);
   if (state.selectedUsageLoading) {
     elements.usageSummary.innerHTML = `
-      <div class="empty-state" style="min-height: 180px; grid-column: 1 / -1;">
+      <div class="empty-state empty-state-compact grid-span-full">
         <p>Loading usage summary...</p>
         ${diagnosticsNote}
       </div>`;
@@ -99,10 +99,10 @@ export function renderUsageSummarySection(params) {
   const usageSummary = state.selectedUsageSummary;
   if (!usageSummary) {
     const usageErrorNote = state.selectedUsageError
-      ? `<p class="connection-note">Usage summary unavailable: ${escapeHtml(state.selectedUsageError)}</p>`
+      ? `<p class="connection-note detail-inline-note">Usage summary unavailable: ${escapeHtml(state.selectedUsageError)}</p>`
       : "";
     elements.usageSummary.innerHTML = `
-      <div class="empty-state" style="min-height: 180px; grid-column: 1 / -1;">
+      <div class="empty-state empty-state-compact grid-span-full">
         <p>No usage summary available for this instance yet.</p>
         ${usageErrorNote}
         ${diagnosticsNote}
@@ -111,7 +111,7 @@ export function renderUsageSummarySection(params) {
   }
   const summary = usageSummary;
   const usageNote = state.selectedUsageCheckedAt
-    ? `<p class="connection-note">Usage summary updated ${escapeHtml(formatRelativeTime(state.selectedUsageCheckedAt))}</p>`
+    ? `<p class="connection-note detail-inline-note">Usage summary updated ${escapeHtml(formatRelativeTime(state.selectedUsageCheckedAt))}</p>`
     : "";
   const cards = [
     buildUsageTable(
@@ -139,11 +139,11 @@ export function renderUsageSummarySection(params) {
 
   const totalCount = Number(summary.totalCount ?? 0);
   const filePath = summary.filePath
-    ? `<p class="connection-note">统计文件：<code>${escapeHtml(summary.filePath)}</code></p>`
+    ? `<p class="connection-note detail-inline-note">统计文件：<code>${escapeHtml(summary.filePath)}</code></p>`
     : "";
 
   elements.usageSummary.innerHTML = `
-    <section class="detail-card" style="grid-column: 1 / -1;">
+    <section class="detail-card detail-card-span-2 usage-summary-hero">
       <div class="detail-card-header">
         <h3>最近调用总览</h3>
         <span class="chip chip-success">调用记录 ${escapeHtml(totalCount)}</span>

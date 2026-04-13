@@ -27,12 +27,12 @@ export async function refreshSelectedInstanceAsync(params) {
   } = params;
   await loadInstanceDiagnostics(scope, id, requestToken);
   if (!isCurrentDetailRequest(state, scope, id, requestToken)) {
-    configurePairingAutoRefresh(Boolean(state.selectedId) && isAdminModeEnabled());
+    // Pairing auto-refresh disabled to reduce system load
     return;
   }
   await loadInstanceUsageSummary(scope, id, requestToken);
   if (!isCurrentDetailRequest(state, scope, id, requestToken)) {
-    configurePairingAutoRefresh(Boolean(state.selectedId) && isAdminModeEnabled());
+    // Pairing auto-refresh disabled to reduce system load
     return;
   }
   if (isAdminModeEnabled()) {
@@ -40,7 +40,7 @@ export async function refreshSelectedInstanceAsync(params) {
       // Keep instance detail usable even if pairing diagnostics fail.
     });
   }
-  configurePairingAutoRefresh(Boolean(state.selectedId) && isAdminModeEnabled());
+  // Pairing auto-refresh disabled to reduce system load - use manual refresh button instead
 }
 
 export function applySelectedInstanceDiagnostics(state, scope, id, requestToken, probe) {

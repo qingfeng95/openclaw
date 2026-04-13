@@ -693,6 +693,38 @@ function buildBaseInstanceConfig(instance: SharedInstanceRecord): Record<string,
   };
 }
 
+function buildInstanceAllowedModels(
+  channels: SharedConsoleModelChannel[],
+): Record<string, Record<string, never>> | undefined {
+  const seen = new Set<string>();
+  const refs: string[] = [];
+
+  const addRef = (value: string | undefined) => {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+      return;
+    }
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    refs.push(trimmed);
+  };
+
+  for (const channel of channels) {
+    for (const model of channel.models) {
+      addRef(`${channel.providerId}/${model.id}`);
+    }
+    addRef(channel.defaultModel);
+    addRef(channel.imageModel);
+    addRef(channel.imageGenerationModel);
+    addRef(channel.pdfModel);
+  }
+
+  return refs.length > 0 ? Object.fromEntries(refs.map((ref) => [ref, {}])) : undefined;
+}
+
 function buildSingleChannelInstanceConfig(
   instance: SharedInstanceRecord,
   channel: SharedConsoleModelChannel | null,
@@ -701,6 +733,7 @@ function buildSingleChannelInstanceConfig(
   if (!channel) {
     return base;
   }
+  const allowedModels = buildInstanceAllowedModels([channel]);
   return {
     ...base,
     models: {
@@ -718,6 +751,7 @@ function buildSingleChannelInstanceConfig(
     agents: {
       defaults: {
         model: channel.defaultModel,
+        ...(allowedModels ? { models: allowedModels } : {}),
         ...(channel.imageModel ? { imageModel: channel.imageModel } : {}),
         ...(channel.imageGenerationModel ? { imageGenerationModel: channel.imageGenerationModel } : {}),
         ...(channel.pdfModel ? { pdfModel: channel.pdfModel } : {}),
@@ -764,6 +798,8 @@ function buildGroupInstanceConfig(
     },
   };
 
+  const allowedModels = buildInstanceAllowedModels(target.channels);
+
   return {
     ...base,
     models: {
@@ -772,6 +808,7 @@ function buildGroupInstanceConfig(
     agents: {
       defaults: {
         model: modelConfig,
+        ...(allowedModels ? { models: allowedModels } : {}),
         ...(imageModels.length > 0
           ? {
               imageModel: {

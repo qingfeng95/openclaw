@@ -38,11 +38,12 @@ export function renderMetaGridSection(params) {
     ["Version", item.probe?.version],
     ["Runtime note", instanceRuntimeDescription(item)],
   ];
+  const highlightedLabels = new Set(["Instance type", "Instance ID", "Process state", "Runtime location"]);
 
   elements.detailMeta.innerHTML = entries
     .map(
       ([label, value]) => `
-        <div class="meta-item">
+        <div class="meta-item${highlightedLabels.has(label) ? " meta-item-highlight" : ""}">
           <span class="meta-label">${escapeHtml(label)}</span>
           <div class="meta-value"><code>${escapeHtml(formatMaybe(value))}</code></div>
         </div>

@@ -18,21 +18,33 @@ import { loadInstancesSection } from "./instance-list-load.js";
 import {
   appendMultiUrlModelChannelRowSection,
   applyGeneratedMultiUrlRoundRobinGroupSection,
+  addModelChannelDraftChannelSection,
+  addModelChannelDraftGroupSection,
   buildModelChannelGeneratorSharedOptionsSection,
   buildMultiUrlModelChannelGenerationPlanSection,
   buildSingleModelChannelGeneratorPayloadSection,
   clearMultiUrlModelChannelRowsSection,
+  cloneModelChannelSettingsDraftSection,
+  getModelChannelDraftExportTextSection,
   getModelChannelGeneratorModeSection,
   getMultiUrlModelChannelRowsSection,
   hydrateModelChannelGeneratorEditorFromSettingsSection,
   importBatchModelChannelGeneratorsAsRowsSection,
   readMultiUrlModelChannelRowFieldSection,
+  removeModelChannelDraftChannelSection,
+  removeModelChannelDraftGroupSection,
+  renderModelChannelDraftWorkbenchSection,
   renumberMultiUrlModelChannelRowsSection,
   setModelChannelGenerateRowsDisabledSection,
   setModelChannelGeneratorModeSection,
   splitModelChannelGeneratorListSection,
   syncMultiUrlModelChannelRowsEmptyStateSection,
+  toggleModelChannelDraftGroupChannelSection,
+  updateModelChannelDraftChannelFieldSection,
+  updateModelChannelDraftGroupFieldSection,
+  updateModelChannelDraftModelsSection,
 } from "./model-channel-generator.js";
+
 import {
   bindModelChannelEventsSection,
   handleDetailModelChannelSubmitSection,
@@ -41,6 +53,7 @@ import {
   loadModelChannelConfigSection,
   renderModelChannelsPanelSection,
   updateSelectedInstanceModelChannelSection,
+  updateGenerateButtonTextSection,
 } from "./model-channel-panel.js";
 import {
   clearAdminModeSection,
@@ -153,6 +166,7 @@ const state = {
   detailRequestToken: 0,
 };
 
+
 const elements = {
   apiBaseInput: document.querySelector("#api-base-input"),
   applyApiBaseButton: document.querySelector("#apply-api-base-button"),
@@ -193,7 +207,16 @@ const elements = {
   copyTokenButton: document.querySelector("#copy-token-button"),
   modelChannelsPanel: document.querySelector("#model-channels-panel"),
   modelChannelsForm: document.querySelector("#model-channels-form"),
-  modelChannelsTextarea: document.querySelector("#model-channels-textarea"),
+  modelChannelDraftSummary: document.querySelector("#model-channel-draft-summary"),
+  modelChannelDraftEmptyState: document.querySelector("#model-channel-draft-empty-state"),
+  modelChannelDraftGroups: document.querySelector("#model-channel-draft-groups"),
+  modelChannelDraftChannels: document.querySelector("#model-channel-draft-channels"),
+  addModelChannelDraftChannelButton: document.querySelector("#add-model-channel-draft-channel-button"),
+  addModelChannelDraftGroupButton: document.querySelector("#add-model-channel-draft-group-button"),
+  modelChannelsExportTextarea: document.querySelector("#model-channels-export-textarea"),
+  copyModelChannelsExportButton: document.querySelector("#copy-model-channels-export-button"),
+  modelChannelsImportTextarea: document.querySelector("#model-channels-import-textarea"),
+  importModelChannelsButton: document.querySelector("#import-model-channels-button"),
   modelChannelGenerateModeSingleInput: document.querySelector("#model-channel-generate-mode-single"),
   modelChannelGenerateModeMultiInput: document.querySelector("#model-channel-generate-mode-multi"),
   modelChannelSinglePanel: document.querySelector("#model-channel-single-panel"),
@@ -598,21 +621,115 @@ async function loadModelChannelConfig({ announce = false } = {}) {
 }
 
 function buildModelChannelSettingsDraft() {
-  const raw = elements.modelChannelsTextarea?.value?.trim() || "{}";
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`JSON 解析失败：${error.message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("模型渠道配置必须是 JSON 对象。");
-  }
   return {
-    ...parsed,
+    ...cloneModelChannelSettingsDraftSection(state.modelChannelSettings || defaultModelChannelSettings()),
     userCanConfigureModels: Boolean(elements.userModelConfigCheckbox?.checked),
   };
 }
+
+function syncModelChannelSettingsTextFromDraft() {
+  state.modelChannelSettingsText = getModelChannelDraftExportTextSection(buildModelChannelSettingsDraft());
+}
+
+function replaceModelChannelDraft(nextSettings, { dirty = true, resyncGenerator = false, adoptUserConfig = false } = {}) {
+  const normalized = normalizeModelChannelSettingsForEditor(nextSettings);
+  if (adoptUserConfig && elements.userModelConfigCheckbox) {
+    elements.userModelConfigCheckbox.checked = Boolean(normalized.userCanConfigureModels);
+  }
+  normalized.userCanConfigureModels = Boolean(elements.userModelConfigCheckbox?.checked ?? normalized.userCanConfigureModels);
+  state.modelChannelSettings = normalized;
+  syncModelChannelSettingsTextFromDraft();
+  state.modelChannelEditorDirty = dirty;
+  state.modelChannelEditorSyncSourceKey = resyncGenerator
+    ? null
+    : JSON.stringify(state.modelChannelSettings || defaultModelChannelSettings());
+  renderAll();
+  return state.modelChannelSettings;
+}
+
+function mutateModelChannelDraft(mutator, options = {}) {
+  return replaceModelChannelDraft(mutator(buildModelChannelSettingsDraft()), {
+    dirty: true,
+    ...options,
+  });
+}
+
+function renderModelChannelDraftWorkbench() {
+  return renderModelChannelDraftWorkbenchSection(elements, escapeHtml, buildModelChannelSettingsDraft());
+}
+
+function addModelChannelDraftChannel() {
+  mutateModelChannelDraft((settings) => addModelChannelDraftChannelSection(settings));
+}
+
+function addModelChannelDraftGroup() {
+  const before = JSON.stringify(buildModelChannelSettingsDraft());
+  const nextSettings = addModelChannelDraftGroupSection(buildModelChannelSettingsDraft());
+  if (JSON.stringify(nextSettings) === before) {
+    pushStatus("info", "无法新增轮询组", "请先新增至少一个渠道，再把它加入轮询组。", "channels");
+    return;
+  }
+  replaceModelChannelDraft(nextSettings, { dirty: true });
+}
+
+function removeModelChannelDraftChannel(channelIndex) {
+  mutateModelChannelDraft((settings) => removeModelChannelDraftChannelSection(settings, channelIndex));
+}
+
+function removeModelChannelDraftGroup(groupIndex) {
+  mutateModelChannelDraft((settings) => removeModelChannelDraftGroupSection(settings, groupIndex));
+}
+
+function updateModelChannelDraftChannelField(channelIndex, field, value) {
+  mutateModelChannelDraft((settings) => updateModelChannelDraftChannelFieldSection(settings, channelIndex, field, value));
+}
+
+function updateModelChannelDraftModels(channelIndex, value) {
+  mutateModelChannelDraft((settings) => updateModelChannelDraftModelsSection(settings, channelIndex, value));
+}
+
+function updateModelChannelDraftGroupField(groupIndex, field, value) {
+  mutateModelChannelDraft((settings) => updateModelChannelDraftGroupFieldSection(settings, groupIndex, field, value));
+}
+
+function toggleModelChannelDraftGroupChannel(groupIndex, channelId, checked) {
+  mutateModelChannelDraft((settings) =>
+    toggleModelChannelDraftGroupChannelSection(settings, groupIndex, channelId, checked),
+  );
+}
+
+async function copyModelChannelDraftExport() {
+  const text = getModelChannelDraftExportTextSection(buildModelChannelSettingsDraft());
+  const copied = await copyText(text, "复制渠道草稿 JSON");
+  pushStatus(copied ? "success" : "info", "已复制渠道草稿 JSON", "导出内容来自当前卡片草稿。", "channels");
+}
+
+function importModelChannelDraft() {
+  const raw = elements.modelChannelsImportTextarea?.value || "";
+  if (!raw.trim()) {
+    pushStatus("error", "导入失败", "JSON 输入为空。", "channels");
+    return;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    replaceModelChannelDraft(parsed, {
+      dirty: true,
+      resyncGenerator: true,
+      adoptUserConfig: true,
+    });
+    pushStatus("success", "已导入渠道草稿", "当前草稿已整体替换，尚未保存到服务端。", "channels");
+  } catch (error) {
+    pushStatus("error", "导入失败", error.message, "channels");
+  }
+}
+
+function handleModelChannelUserConfigChange() {
+  state.modelChannelEditorDirty = true;
+  syncModelChannelSettingsTextFromDraft();
+  renderModelChannelDraftWorkbench();
+  renderModelChannelsPanel();
+}
+
 
 function updateTabStatus(kind, title, detail = "", tab = state.activeTab) {
   const note = elements.tabStatusNotes.find((item) => item.getAttribute("data-tab-status") === tab);
@@ -653,12 +770,16 @@ function renderSummary() {
     formatMaybe,
     formatDateTime,
   });
+  const highlightedLabels = new Set(["共享实例总数", "当前健康可用", "最近调用次数"]);
 
   elements.summaryGrid.innerHTML = cards
     .map(
-      (card) => `
-        <article class="summary-card">
-          <span class="summary-label">${escapeHtml(card.label)}</span>
+      (card, index) => `
+        <article class="summary-card${highlightedLabels.has(card.label) ? " summary-card-accent" : ""}">
+          <div class="summary-card-top">
+            <span class="summary-label">${escapeHtml(card.label)}</span>
+            <span class="summary-index">${escapeHtml(String(index + 1).padStart(2, "0"))}</span>
+          </div>
           <div class="summary-value">${escapeHtml(card.value)}</div>
           <div class="summary-subtext">${escapeHtml(card.subtext)}</div>
         </article>
@@ -682,22 +803,25 @@ function renderWatchlist() {
 
   if (flagged.length === 0) {
     elements.watchlistPanel.innerHTML =
-      '<div class="empty-state" style="min-height: 180px;">当前没有需要优先处理的实例。已经运行的实例都通过了检查，未运行实例也没有新的异常。</div>';
+      '<div class="empty-state empty-state-compact">当前没有需要优先处理的实例。已经运行的实例都通过了检查，未运行实例也没有新的异常。</div>';
     return;
   }
 
   elements.watchlistPanel.innerHTML = flagged
-    .map((item) => {
+    .map((item, index) => {
       const health = probeHealthLabel(item);
       const processState = processStateLabel(item);
       const note = buildWatchNote(item);
       return `
         <article class="watch-item" data-instance-id="${escapeHtml(item.id)}" data-instance-scope="shared">
-          <div class="watch-item-title">
-            <span>${escapeHtml(item.name || item.id)}</span>
+          <div class="watch-item-topline">
+            <span class="watch-item-rank">P${escapeHtml(String(index + 1))}</span>
             <span class="chip ${health.className || processState.className}">${escapeHtml(
               health.label === "未检查" ? processState.label : health.label,
             )}</span>
+          </div>
+          <div class="watch-item-title">
+            <span>${escapeHtml(item.name || item.id)}</span>
           </div>
           <div class="watch-item-meta">
             <span class="chip">${escapeHtml(item.id)}</span>
@@ -719,15 +843,20 @@ function renderHotspots() {
   const sections = buildOverviewHotspotSectionsSection(state.overviewUsageSummary, {
     topEntries,
   });
+  const usageNote = buildOverviewUsageNoteSection(state, { formatDateTime });
 
   const intro = `
-    <article class="hotspot-card">
-      <div class="hotspot-title">这块表示什么</div>
+    <article class="hotspot-card hotspot-card-intro">
+      <div class="hotspot-title-row">
+        <div class="hotspot-title">这块表示什么</div>
+        <span class="chip">共享实例聚合视角</span>
+      </div>
       <div class="hotspot-note">
         这里看的不是某一个实例，而是所有共享实例合在一起后的最近情况。
         值班管理员和运营人员可以用它快速判断：最近大家主要在共享实例上做什么、最常被什么挡住、
         以及请求更多是在实例本地完成还是走共享执行通道。
       </div>
+      <div class="hotspot-footnote">${escapeHtml(usageNote)}</div>
     </article>
   `;
 
@@ -752,7 +881,9 @@ function renderHotspots() {
           : `<div class="hotspot-note">${escapeHtml(section.empty)}</div>`;
         return `
           <article class="hotspot-card">
-            <div class="hotspot-title">${escapeHtml(section.title)}</div>
+            <div class="hotspot-title-row">
+              <div class="hotspot-title">${escapeHtml(section.title)}</div>
+            </div>
             ${body}
           </article>
         `;
@@ -764,13 +895,13 @@ function renderContainers() {
   const meta = state.containersMeta;
   if (!meta) {
     elements.containersPanel.innerHTML =
-      '<div class="empty-state" style="min-height: 180px;">容器信息还没有加载出来。</div>';
+      '<div class="empty-state empty-state-compact">容器信息还没有加载出来。</div>';
     return;
   }
 
   if (!meta.available && state.containers.length === 0) {
     elements.containersPanel.innerHTML = `
-      <div class="empty-state" style="min-height: 180px;">
+      <div class="empty-state empty-state-compact">
         当前还拿不到 Docker 容器信息。${escapeHtml(meta.error || "请确认 Docker 已启动，并且当前账号有权限访问。")}
       </div>
     `;
@@ -783,7 +914,7 @@ function renderContainers() {
         ? "Docker 里有容器在运行，但当前还没有任何实例绑定到容器；这个面板只显示已被实例引用或声明过的容器。"
         : "当前还没有任何实例绑定到容器。";
     elements.containersPanel.innerHTML = `
-      <div class="empty-state" style="min-height: 180px;">${escapeHtml(message)}</div>
+      <div class="empty-state empty-state-compact">${escapeHtml(message)}</div>
     `;
     return;
   }
@@ -804,19 +935,28 @@ function renderContainers() {
             : container.state === "missing"
               ? "未发现"
               : formatMaybe(container.state);
+      const attachedCount = Number(container.attachedInstances?.length ?? 0);
       const attached =
         Array.isArray(container.attachedInstances) && container.attachedInstances.length > 0
           ? `
-              <div class="container-card-instances">
-                ${container.attachedInstances
-                  .map(
-                    (item) =>
-                      `<span class="chip">${escapeHtml(item.name || item.id)} · ${escapeHtml(item.id)}</span>`,
-                  )
-                  .join("")}
+              <div class="container-card-section">
+                <div class="container-card-section-label">已绑定实例</div>
+                <div class="container-card-instances">
+                  ${container.attachedInstances
+                    .map(
+                      (item) =>
+                        `<span class="chip">${escapeHtml(item.name || item.id)} · ${escapeHtml(item.id)}</span>`,
+                    )
+                    .join("")}
+                </div>
               </div>
             `
-          : '<div class="container-card-note">当前还没有实例明确绑定到这个容器。</div>';
+          : `
+              <div class="container-card-section">
+                <div class="container-card-section-label">已绑定实例</div>
+                <div class="container-card-note">当前还没有实例明确绑定到这个容器。</div>
+              </div>
+            `;
       const canOperate =
         container.source === "docker" &&
         (((container.attachedInstances?.length ?? 0) > 0) || isProvisionedConsoleContainer(container));
@@ -843,14 +983,17 @@ function renderContainers() {
               `;
       return `
         <article class="container-card">
+          <div class="container-card-topline">
+            <span class="chip">${escapeHtml(container.source === "docker" ? "Docker 资产" : "实例声明")}</span>
+            <span class="chip ${stateClass}">${escapeHtml(stateLabel)}</span>
+          </div>
           <div class="container-card-title">
             <span>${escapeHtml(container.name)}</span>
-            <span class="chip ${stateClass}">${escapeHtml(stateLabel)}</span>
           </div>
           <div class="container-card-meta">
             <span class="chip">镜像 ${escapeHtml(formatMaybe(container.image))}</span>
-            <span class="chip">实例 ${escapeHtml(container.attachedInstances?.length ?? 0)} 个</span>
-            <span class="chip">${escapeHtml(container.source === "docker" ? "来自 Docker" : "实例声明的容器")}</span>
+            <span class="chip">实例 ${escapeHtml(attachedCount)} 个</span>
+            <span class="chip">${escapeHtml(container.source === "docker" ? "可观察" : "待纳管")}</span>
           </div>
           <div class="container-card-note">${escapeHtml(container.status || "暂无额外状态说明")}</div>
           ${actions}
@@ -906,8 +1049,16 @@ function renderModelChannelSelects() {
 }
 
 function syncModelChannelGeneratorEditorFromState() {
-  const sourceSettings = isAdminModeEnabled() ? state.modelChannelSettings : null;
-  const sourceKey = sourceSettings ? JSON.stringify(sourceSettings) : "";
+  if (!isAdminModeEnabled()) {
+    if (state.modelChannelEditorSyncSourceKey === "") {
+      return;
+    }
+    hydrateModelChannelGeneratorEditorFromSettings(null);
+    state.modelChannelEditorSyncSourceKey = "";
+    return;
+  }
+  const sourceSettings = state.modelChannelSettings || defaultModelChannelSettings();
+  const sourceKey = JSON.stringify(sourceSettings);
   if (state.modelChannelEditorSyncSourceKey === sourceKey) {
     return;
   }
@@ -987,7 +1138,7 @@ function renderInstancesList() {
 
   if (items.length === 0) {
     elements.instancesList.innerHTML =
-      '<div class="empty-state" style="min-height: 220px;">没有匹配的共享实例，试试清空过滤条件。</div>';
+      '<div class="empty-state empty-state-tall">没有匹配的共享实例，试试清空过滤条件。</div>';
     return;
   }
 
@@ -995,11 +1146,15 @@ function renderInstancesList() {
     .map((item) => {
       const health = probeHealthLabel(item);
       const processState = processStateLabel(item);
+      const selected = item.id === state.selectedId && state.selectedScope === "shared";
       return `
-        <article class="instance-card ${item.id === state.selectedId && state.selectedScope === "shared" ? "active" : ""}" data-instance-id="${escapeHtml(item.id)}" data-instance-scope="shared">
+        <article class="instance-card ${selected ? "active" : ""}" data-instance-id="${escapeHtml(item.id)}" data-instance-scope="shared">
+          <div class="instance-card-topline">
+            <span class="chip">共享实例</span>
+            <span class="chip ${processState.className}">${escapeHtml(processState.label)}</span>
+          </div>
           <div class="instance-card-title">
             <span>${escapeHtml(item.name || item.id)}</span>
-            <span class="chip ${processState.className}">${escapeHtml(processState.label)}</span>
           </div>
           <div class="instance-card-meta">
             <span class="chip">${escapeHtml(item.id)}</span>
@@ -1007,7 +1162,6 @@ function renderInstancesList() {
             <span class="chip">端口 ${escapeHtml(formatMaybe(item.port))}</span>
           </div>
           <div class="instance-card-tags">
-            <span class="chip">共享实例</span>
             <span class="chip">${escapeHtml(instanceRuntimeChipLabel(item))}</span>
             <span class="chip">版本 ${escapeHtml(formatMaybe(item.probe?.version))}</span>
             <span class="chip">${escapeHtml(formatRelativeTime(item.probe?.checkedAt || item.timestamps?.updatedAt))}</span>
@@ -1022,7 +1176,7 @@ function renderDedicatedInstancesList() {
   const items = state.dedicatedInstances;
   if (items.length === 0) {
     elements.dedicatedInstancesList.innerHTML =
-      '<div class="empty-state" style="min-height: 220px;">当前还没有发现单独实例。后续把单间虾纳入目录后，这里就会显示。</div>';
+      '<div class="empty-state empty-state-tall">当前还没有发现单独实例。后续把单间虾纳入目录后，这里就会显示。</div>';
     return;
   }
 
@@ -1030,11 +1184,15 @@ function renderDedicatedInstancesList() {
     .map((item) => {
       const health = probeHealthLabel(item);
       const processState = processStateLabel(item);
+      const selected = item.id === state.selectedId && state.selectedScope === "dedicated";
       return `
-        <article class="instance-card ${item.id === state.selectedId && state.selectedScope === "dedicated" ? "active" : ""}" data-instance-id="${escapeHtml(item.id)}" data-instance-scope="dedicated">
+        <article class="instance-card ${selected ? "active" : ""}" data-instance-id="${escapeHtml(item.id)}" data-instance-scope="dedicated">
+          <div class="instance-card-topline">
+            <span class="chip">单独实例</span>
+            <span class="chip ${processState.className}">${escapeHtml(processState.label)}</span>
+          </div>
           <div class="instance-card-title">
             <span>${escapeHtml(item.name || item.id)}</span>
-            <span class="chip ${processState.className}">${escapeHtml(processState.label)}</span>
           </div>
           <div class="instance-card-meta">
             <span class="chip">${escapeHtml(item.id)}</span>
@@ -1042,7 +1200,6 @@ function renderDedicatedInstancesList() {
             <span class="chip">端口 ${escapeHtml(formatMaybe(item.port))}</span>
           </div>
           <div class="instance-card-tags">
-            <span class="chip">单独实例</span>
             <span class="chip">${escapeHtml(instanceRuntimeChipLabel(item))}</span>
             <span class="chip">版本 ${escapeHtml(formatMaybe(item.probe?.version))}</span>
             <span class="chip">${escapeHtml(formatRelativeTime(item.probe?.checkedAt || item.timestamps?.updatedAt))}</span>
@@ -1195,6 +1352,7 @@ function renderAll() {
   renderModelChannelSelects();
   syncModelChannelGeneratorEditorFromState();
   renderModelChannelsPanel();
+  renderModelChannelDraftWorkbench();
   renderContainerLogs();
   renderInstancesList();
   renderDedicatedInstancesList();
@@ -1895,9 +2053,7 @@ async function loadRuntimeConfig() {
 }
 
 function buildModelChannelGeneratorBaseSettings() {
-  return elements.modelChannelsTextarea?.value?.trim()
-    ? buildModelChannelSettingsDraft()
-    : state.modelChannelSettings || defaultModelChannelSettings();
+  return buildModelChannelSettingsDraft();
 }
 
 function splitModelChannelGeneratorList(value) {
@@ -2025,9 +2181,7 @@ function handleModelChannelGenerateSubmit() {
     normalizeModelChannelSettingsForEditor,
     buildSingleModelChannelGeneratorPayload,
     applyGeneratedMultiUrlRoundRobinGroup,
-    elements,
-    state,
-    renderAll,
+    replaceModelChannelDraft,
     updateConnectionNote,
   });
 }
@@ -2058,6 +2212,17 @@ function bindModelChannelEvents() {
     handleDetailModelChannelSubmit,
     updateSelectedInstanceModelChannel,
     isAdminModeEnabled,
+    handleModelChannelUserConfigChange,
+    addModelChannelDraftChannel,
+    addModelChannelDraftGroup,
+    removeModelChannelDraftChannel,
+    removeModelChannelDraftGroup,
+    updateModelChannelDraftChannelField,
+    updateModelChannelDraftModels,
+    updateModelChannelDraftGroupField,
+    toggleModelChannelDraftGroupChannel,
+    copyModelChannelDraftExport,
+    importModelChannelDraft,
   });
 }
 
@@ -2076,6 +2241,7 @@ async function init() {
   setActiveTab(state.activeTab, { persist: false });
   bindModelChannelEvents();
   setModelChannelGenerateMode(getModelChannelGeneratorMode());
+  updateGenerateButtonTextSection(elements);
   syncMultiUrlModelChannelRowsEmptyState();
   syncCreateFormConstraints();
   updateAdminModeUi();

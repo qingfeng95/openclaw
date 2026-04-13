@@ -182,25 +182,491 @@ function isMultiUrlRowBlank(row) {
   );
 }
 
-function buildDefaultRoundRobinGroupIdentity(groupId, groupName, generatedChannelIds) {
-  const preferredGroupId = String(groupId || "").trim();
-  const firstGeneratedId = String(generatedChannelIds[0] || "").trim();
-  const baseId =
-    preferredGroupId ||
-    `${stripTrailingOrdinal(firstGeneratedId) || sanitizeModelChannelSafeId(firstGeneratedId, "channel")}-rr`;
-  const normalizedId = sanitizeModelChannelSafeId(baseId, "channel-rr");
-  const groupTitleBase = stripTrailingRoundRobinSuffix(groupName) || stripTrailingRoundRobinSuffix(normalizedId) || "Channel";
+function trimModelChannelDraftOptional(value) {
+  const normalized = String(value ?? "").trim();
+  return normalized || undefined;
+}
+
+function cloneModelChannelDraftValue(value) {
+  if (typeof structuredClone === "function") {
+    return structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+function buildDefaultModelChannelDraftModel(id, api) {
+  const modelId = String(id || "").trim();
   return {
-    id: normalizedId,
-    name: String(groupName || "").trim() || `${groupTitleBase} RR`,
+    id: modelId,
+    name: modelId,
+    api: trimModelChannelDraftOptional(normalizeModelChannelGeneratorApiValueSection(api, { allowBlank: true })),
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+  };
+}
+
+function reserveUniqueModelChannelProviderId(baseValue, takenIds) {
+  const base = sanitizeModelChannelSafeId(baseValue, "channel");
+  let candidate = base;
+  let suffix = 2;
+  while (takenIds.has(candidate)) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  takenIds.add(candidate);
+  return candidate;
+}
+
+function splitModelChannelReference(value, providerId) {
+  const raw = String(value || "").trim();
+  const normalizedProviderId = String(providerId || "").trim();
+  if (!raw || !normalizedProviderId) {
+    return raw;
+  }
+  const prefix = `${normalizedProviderId}/`;
+  return raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
+}
+
+function rewriteModelChannelReferenceProvider(value, previousProviderId, nextProviderId) {
+  const raw = String(value || "").trim();
+  const previous = String(previousProviderId || "").trim();
+  const next = String(nextProviderId || "").trim();
+  if (!raw || !previous || !next) {
+    return raw;
+  }
+  const prefix = `${previous}/`;
+  if (!raw.startsWith(prefix)) {
+    return raw;
+  }
+  return `${next}/${raw.slice(prefix.length)}`;
+}
+
+function normalizeModelChannelDraftModelReferenceList(channel, nextModelIds) {
+  const providerId = String(channel?.providerId || "").trim();
+  const nextIds = nextModelIds.map((entry) => String(entry || "").trim()).filter(Boolean);
+  const currentDefaultId = splitModelChannelReference(channel?.defaultModel, providerId);
+  if (nextIds.length === 0) {
+    channel.defaultModel = "";
+  } else if (!nextIds.includes(currentDefaultId)) {
+    channel.defaultModel = nextIds[0];
+  }
+  for (const field of ["imageModel", "imageGenerationModel", "pdfModel"]) {
+    const modelId = splitModelChannelReference(channel?.[field], providerId);
+    if (modelId && !nextIds.includes(modelId)) {
+      channel[field] = undefined;
+    }
+  }
+}
+
+function channelHasAdvancedDraftFields(channel) {
+  if (channel?.auth || (channel?.headers && Object.keys(channel.headers).length > 0)) {
+    return true;
+  }
+  return (channel?.models ?? []).some((model) => {
+    const inputKinds = Array.isArray(model?.input) ? model.input : [];
+    const cost = model?.cost ?? {};
+    return (
+      String(model?.name || "").trim() !== String(model?.id || "").trim() ||
+      String(model?.api || "").trim() !== "" ||
+      model?.reasoning === false ||
+      inputKinds.includes("image") ||
+      Number(model?.contextWindow ?? 128_000) !== 128_000 ||
+      Number(model?.maxTokens ?? 16_384) !== 16_384 ||
+      Number(cost.input ?? 0) !== 0 ||
+      Number(cost.output ?? 0) !== 0 ||
+      Number(cost.cacheRead ?? 0) !== 0 ||
+      Number(cost.cacheWrite ?? 0) !== 0
+    );
+  });
+}
+
+function describeModelChannelAdvancedDraftFields(channel) {
+  const labels = [];
+  if (channel?.auth) {
+    labels.push("auth");
+  }
+  if (channel?.headers && Object.keys(channel.headers).length > 0) {
+    labels.push("headers");
+  }
+  if (channelHasAdvancedDraftFields(channel)) {
+    labels.push("model details");
+  }
+  return [...new Set(labels)];
+}
+
+function buildModelChannelDraftSummaryMarkup(settings, escapeHtml) {
+  const channels = resolveSettingsChannels(settings);
+  const groups = resolveSettingsGroups(settings);
+  const advancedChannelCount = channels.filter(channelHasAdvancedDraftFields).length;
+  const summary = `${channels.length} 个渠道 / ${groups.length} 个轮询组`;
+  const detail =
+    advancedChannelCount > 0
+      ? `${advancedChannelCount} 个渠道还保留了 auth、headers 或细粒度 model 参数；需要细改时请用下方高级 JSON。`
+      : "卡片是唯一主编辑入口；高级 JSON 仅用于低频导入 / 导出。";
+  return `<strong>${escapeHtml(summary)}</strong><br />${escapeHtml(detail)}`;
+}
+
+function renderModelChannelDraftGroupCard(group, index, channels, escapeHtml) {
+  const title = String(group?.name || group?.id || `轮询组 ${index + 1}`).trim();
+  const selectedChannelIds = new Set(
+    Array.isArray(group?.channelIds) ? group.channelIds.map((channelId) => String(channelId || "").trim()).filter(Boolean) : [],
+  );
+  const channelOptions =
+    channels.length > 0
+      ? channels
+          .map((channel) => {
+            const channelId = String(channel?.id || "").trim();
+            const channelLabel = String(channel?.name || channelId).trim() || channelId;
+            return `
+              <label class="toggle channel-group-member-option">
+                <input
+                  type="checkbox"
+                  data-action="toggle-model-channel-draft-group-member"
+                  data-group-index="${index}"
+                  data-channel-id="${escapeHtml(channelId)}"
+                  ${selectedChannelIds.has(channelId) ? "checked" : ""}
+                />
+                <span>${escapeHtml(channelLabel)}<small class="field-note">${escapeHtml(channelId)}</small></span>
+              </label>
+            `;
+          })
+          .join("")
+      : '<div class="field-note">先新增至少一个渠道，再把它加入轮询组。</div>';
+
+  return `
+    <section class="generator-card channel-draft-item channel-draft-group-card" data-model-channel-group-index="${index}">
+      <div class="generator-card-header">
+        <div>
+          <p class="generator-card-title">轮询组 ${index + 1} · ${escapeHtml(title)}</p>
+          <p class="field-note">把已存在的渠道加入这个 round-robin 组，作为统一调度入口。</p>
+        </div>
+        <div class="inline-actions">
+          <button class="button" type="button" data-action="remove-model-channel-draft-group" data-group-index="${index}">删除轮询组</button>
+        </div>
+      </div>
+      <div class="generator-card-grid">
+        <label class="field">
+          <span>轮询组 ID</span>
+          <input data-field="id" data-group-index="${index}" type="text" spellcheck="false" value="${escapeHtml(String(group?.id || ""))}" />
+        </label>
+        <label class="field">
+          <span>轮询组名称</span>
+          <input data-field="name" data-group-index="${index}" type="text" spellcheck="false" value="${escapeHtml(String(group?.name || ""))}" />
+        </label>
+        <label class="field field-span-2">
+          <span>策略</span>
+          <input type="text" value="round-robin" disabled />
+          <small class="field-note">当前值班台只支持 round-robin 轮询组。</small>
+        </label>
+      </div>
+      <div class="channel-group-members">
+        <span class="channel-group-members-label">包含渠道</span>
+        <div class="channel-group-members-grid">${channelOptions}</div>
+      </div>
+    </section>
+  `;
+}
+
+function renderModelChannelDraftChannelCard(channel, index, escapeHtml) {
+  const title = String(channel?.name || channel?.id || `渠道 ${index + 1}`).trim();
+  const modelIds = Array.isArray(channel?.models)
+    ? channel.models.map((model) => String(model?.id || "").trim()).filter(Boolean).join("\n")
+    : "";
+  const advancedLabels = describeModelChannelAdvancedDraftFields(channel);
+  const advancedNote =
+    advancedLabels.length > 0
+      ? `
+          <div class="field-note channel-draft-advanced-note">
+            已保留高级字段：${escapeHtml(advancedLabels.join(", "))}。要细改这些内容，请用下方高级 JSON。
+          </div>
+        `
+      : "";
+
+  return `
+    <section class="generator-card channel-draft-item" data-model-channel-index="${index}">
+      <div class="generator-card-header">
+        <p class="generator-card-title">渠道 ${index + 1} · ${escapeHtml(title)}</p>
+        <div class="inline-actions">
+          <button class="button" type="button" data-action="remove-model-channel-draft-channel" data-channel-index="${index}">删除渠道</button>
+        </div>
+      </div>
+      <div class="generator-card-grid">
+        <label class="field">
+          <span>渠道 ID</span>
+          <input data-field="id" data-channel-index="${index}" type="text" spellcheck="false" value="${escapeHtml(String(channel?.id || ""))}" />
+        </label>
+        <label class="field">
+          <span>渠道名称</span>
+          <input data-field="name" data-channel-index="${index}" type="text" spellcheck="false" value="${escapeHtml(String(channel?.name || ""))}" />
+        </label>
+        <label class="field">
+          <span>providerId</span>
+          <input data-field="providerId" data-channel-index="${index}" type="text" spellcheck="false" value="${escapeHtml(String(channel?.providerId || ""))}" />
+        </label>
+        <label class="field">
+          <span>API 类型</span>
+          <select data-field="api" data-channel-index="${index}">
+            ${buildModelChannelGeneratorApiOptionsHtmlSection(escapeHtml, { selectedValue: channel?.api || "", allowBlank: true })}
+          </select>
+        </label>
+        <label class="field field-span-2">
+          <span>渠道 URL</span>
+          <input data-field="baseUrl" data-channel-index="${index}" type="text" spellcheck="false" value="${escapeHtml(String(channel?.baseUrl || ""))}" placeholder="https://api.openai.com/v1" />
+        </label>
+        <label class="field field-span-2">
+          <span>API Key</span>
+          <textarea data-field="apiKey" data-channel-index="${index}" rows="2" spellcheck="false" placeholder="sk-xxx">${escapeHtml(String(channel?.apiKey || ""))}</textarea>
+        </label>
+        <label class="field">
+          <span>默认模型</span>
+          <input data-field="defaultModel" data-channel-index="${index}" type="text" spellcheck="false" value="${escapeHtml(String(channel?.defaultModel || ""))}" placeholder="gpt-5-mini" />
+        </label>
+        <label class="field">
+          <span>图片输入模型</span>
+          <input data-field="imageModel" data-channel-index="${index}" type="text" spellcheck="false" value="${escapeHtml(String(channel?.imageModel || ""))}" />
+        </label>
+        <label class="field">
+          <span>图片生成模型</span>
+          <input data-field="imageGenerationModel" data-channel-index="${index}" type="text" spellcheck="false" value="${escapeHtml(String(channel?.imageGenerationModel || ""))}" />
+        </label>
+        <label class="field">
+          <span>PDF 模型</span>
+          <input data-field="pdfModel" data-channel-index="${index}" type="text" spellcheck="false" value="${escapeHtml(String(channel?.pdfModel || ""))}" />
+        </label>
+        <label class="field field-span-2">
+          <span>模型 ID（每行一个）</span>
+          <textarea data-field="models" data-channel-index="${index}" rows="4" spellcheck="false" placeholder="gpt-5-mini">${escapeHtml(modelIds)}</textarea>
+          <small class="field-note">会保留已有模型的 reasoning / input / cost 等字段；新增模型使用默认参数。</small>
+        </label>
+      </div>
+      ${advancedNote}
+    </section>
+  `;
+}
+
+export function getModelChannelDraftExportTextSection(settings) {
+  return JSON.stringify(settings ?? { userCanConfigureModels: false, channels: [], channelGroups: [] }, null, 2);
+}
+
+export function renderModelChannelDraftWorkbenchSection(elements, escapeHtml, settings) {
+  const currentSettings = settings ?? { userCanConfigureModels: false, channels: [], channelGroups: [] };
+  const channels = resolveSettingsChannels(currentSettings);
+  const groups = resolveSettingsGroups(currentSettings);
+  if (elements.modelChannelDraftSummary) {
+    elements.modelChannelDraftSummary.innerHTML = buildModelChannelDraftSummaryMarkup(currentSettings, escapeHtml);
+  }
+  if (elements.modelChannelsExportTextarea) {
+    elements.modelChannelsExportTextarea.value = getModelChannelDraftExportTextSection(currentSettings);
+  }
+  if (elements.modelChannelDraftEmptyState) {
+    const isEmpty = channels.length === 0 && groups.length === 0;
+    elements.modelChannelDraftEmptyState.classList.toggle("hidden", !isEmpty);
+  }
+  if (elements.modelChannelDraftGroups) {
+    elements.modelChannelDraftGroups.innerHTML = groups
+      .map((group, index) => renderModelChannelDraftGroupCard(group, index, channels, escapeHtml))
+      .join("");
+  }
+  if (elements.modelChannelDraftChannels) {
+    elements.modelChannelDraftChannels.innerHTML = channels
+      .map((channel, index) => renderModelChannelDraftChannelCard(channel, index, escapeHtml))
+      .join("");
+  }
+}
+
+export function cloneModelChannelSettingsDraftSection(settings) {
+  return cloneModelChannelDraftValue(settings ?? { userCanConfigureModels: false, channels: [], channelGroups: [] });
+}
+
+export function addModelChannelDraftChannelSection(settings) {
+  const nextSettings = cloneModelChannelSettingsDraftSection(settings);
+  nextSettings.channels = Array.isArray(nextSettings.channels) ? nextSettings.channels : [];
+  nextSettings.channelGroups = Array.isArray(nextSettings.channelGroups) ? nextSettings.channelGroups : [];
+  const takenIds = new Set([
+    ...nextSettings.channels.map((channel) => String(channel?.id || "").trim()).filter(Boolean),
+    ...nextSettings.channelGroups.map((group) => String(group?.id || "").trim()).filter(Boolean),
+  ]);
+  const takenProviderIds = new Set(
+    nextSettings.channels.map((channel) => String(channel?.providerId || "").trim()).filter(Boolean),
+  );
+  const channelId = reserveUniqueModelChannelSafeId("channel", takenIds);
+  const providerId = reserveUniqueModelChannelProviderId(channelId, takenProviderIds);
+  const modelId = "gpt-5-mini";
+  nextSettings.channels.push({
+    id: channelId,
+    name: `渠道 ${nextSettings.channels.length + 1}`,
+    providerId,
+    baseUrl: "",
+    api: "openai-responses",
+    models: [buildDefaultModelChannelDraftModel(modelId, "openai-responses")],
+    defaultModel: modelId,
+  });
+  return nextSettings;
+}
+
+export function removeModelChannelDraftChannelSection(settings, channelIndex) {
+  const nextSettings = cloneModelChannelSettingsDraftSection(settings);
+  nextSettings.channels = Array.isArray(nextSettings.channels) ? [...nextSettings.channels] : [];
+  nextSettings.channelGroups = Array.isArray(nextSettings.channelGroups) ? [...nextSettings.channelGroups] : [];
+  const [removedChannel] = nextSettings.channels.splice(channelIndex, 1);
+  const removedChannelId = String(removedChannel?.id || "").trim();
+  if (!removedChannelId) {
+    return nextSettings;
+  }
+  nextSettings.channelGroups = nextSettings.channelGroups
+    .map((group) => ({
+      ...group,
+      channelIds: Array.isArray(group?.channelIds)
+        ? group.channelIds.map((channelId) => String(channelId || "").trim()).filter((channelId) => channelId && channelId !== removedChannelId)
+        : [],
+    }))
+    .filter((group) => group.channelIds.length > 0);
+  return nextSettings;
+}
+
+export function updateModelChannelDraftChannelFieldSection(settings, channelIndex, field, value) {
+  const nextSettings = cloneModelChannelSettingsDraftSection(settings);
+  nextSettings.channels = Array.isArray(nextSettings.channels) ? [...nextSettings.channels] : [];
+  const channel = nextSettings.channels[channelIndex];
+  if (!channel) {
+    return nextSettings;
+  }
+  const previousProviderId = String(channel.providerId || "").trim();
+  const rawValue = String(value ?? "").trim();
+  const optionalFields = new Set(["api", "apiKey", "imageModel", "imageGenerationModel", "pdfModel", "auth"]);
+  channel[field] = optionalFields.has(field) ? trimModelChannelDraftOptional(rawValue) : rawValue;
+  if (field === "providerId" && previousProviderId && rawValue) {
+    for (const referenceField of ["defaultModel", "imageModel", "imageGenerationModel", "pdfModel"]) {
+      channel[referenceField] = rewriteModelChannelReferenceProvider(
+        channel[referenceField],
+        previousProviderId,
+        rawValue,
+      );
+    }
+  }
+  return nextSettings;
+}
+
+export function updateModelChannelDraftModelsSection(settings, channelIndex, rawValue) {
+  const nextSettings = cloneModelChannelSettingsDraftSection(settings);
+  nextSettings.channels = Array.isArray(nextSettings.channels) ? [...nextSettings.channels] : [];
+  const channel = nextSettings.channels[channelIndex];
+  if (!channel) {
+    return nextSettings;
+  }
+  const nextModelIds = splitModelChannelGeneratorListSection(rawValue);
+  const existingModels = new Map(
+    (Array.isArray(channel.models) ? channel.models : [])
+      .map((model) => [String(model?.id || "").trim(), model])
+      .filter(([modelId]) => modelId),
+  );
+  channel.models = nextModelIds.map((modelId) => {
+    const existing = existingModels.get(modelId);
+    return existing ? { ...existing } : buildDefaultModelChannelDraftModel(modelId, channel.api);
+  });
+  normalizeModelChannelDraftModelReferenceList(channel, nextModelIds);
+  return nextSettings;
+}
+
+export function addModelChannelDraftGroupSection(settings) {
+  const nextSettings = cloneModelChannelSettingsDraftSection(settings);
+  nextSettings.channels = Array.isArray(nextSettings.channels) ? nextSettings.channels : [];
+  nextSettings.channelGroups = Array.isArray(nextSettings.channelGroups) ? nextSettings.channelGroups : [];
+  const firstChannelId = String(nextSettings.channels[0]?.id || "").trim();
+  if (!firstChannelId) {
+    return nextSettings;
+  }
+  const takenIds = new Set([
+    ...nextSettings.channels.map((channel) => String(channel?.id || "").trim()).filter(Boolean),
+    ...nextSettings.channelGroups.map((group) => String(group?.id || "").trim()).filter(Boolean),
+  ]);
+  const groupId = reserveUniqueModelChannelSafeId("channel-group", takenIds);
+  nextSettings.channelGroups.push({
+    id: groupId,
+    name: `轮询组 ${nextSettings.channelGroups.length + 1}`,
+    strategy: "round-robin",
+    channelIds: [firstChannelId],
+  });
+  return nextSettings;
+}
+
+export function removeModelChannelDraftGroupSection(settings, groupIndex) {
+  const nextSettings = cloneModelChannelSettingsDraftSection(settings);
+  nextSettings.channelGroups = Array.isArray(nextSettings.channelGroups) ? [...nextSettings.channelGroups] : [];
+  nextSettings.channelGroups.splice(groupIndex, 1);
+  return nextSettings;
+}
+
+export function updateModelChannelDraftGroupFieldSection(settings, groupIndex, field, value) {
+  const nextSettings = cloneModelChannelSettingsDraftSection(settings);
+  nextSettings.channelGroups = Array.isArray(nextSettings.channelGroups) ? [...nextSettings.channelGroups] : [];
+  const group = nextSettings.channelGroups[groupIndex];
+  if (!group) {
+    return nextSettings;
+  }
+  group[field] = String(value ?? "").trim();
+  return nextSettings;
+}
+
+export function toggleModelChannelDraftGroupChannelSection(settings, groupIndex, channelId, checked) {
+  const nextSettings = cloneModelChannelSettingsDraftSection(settings);
+  nextSettings.channels = Array.isArray(nextSettings.channels) ? [...nextSettings.channels] : [];
+  nextSettings.channelGroups = Array.isArray(nextSettings.channelGroups) ? [...nextSettings.channelGroups] : [];
+  const group = nextSettings.channelGroups[groupIndex];
+  if (!group) {
+    return nextSettings;
+  }
+  const selectedIds = new Set(
+    Array.isArray(group.channelIds) ? group.channelIds.map((entry) => String(entry || "").trim()).filter(Boolean) : [],
+  );
+  const normalizedChannelId = String(channelId || "").trim();
+  if (!normalizedChannelId) {
+    return nextSettings;
+  }
+  if (checked) {
+    selectedIds.add(normalizedChannelId);
+  } else {
+    selectedIds.delete(normalizedChannelId);
+  }
+  const orderedChannelIds = nextSettings.channels
+    .map((channel) => String(channel?.id || "").trim())
+    .filter((id) => id && selectedIds.has(id));
+  group.channelIds = orderedChannelIds;
+  return nextSettings;
+}
+
+function buildDefaultRoundRobinGroupIdentity(groupId, groupName, channelIds) {
+  const normalizedChannelIds = channelIds.map((channelId) => String(channelId || "").trim()).filter(Boolean);
+  const channelStem =
+    stripTrailingRoundRobinSuffix(deriveCommonStem(normalizedChannelIds, normalizedChannelIds[0] || "channel")) || "channel";
+  const nextId = String(groupId || "").trim() || `${channelStem}-rr`;
+  const nextName = String(groupName || "").trim() || `${channelStem} round robin`;
+  return {
+    id: nextId,
+    name: nextName,
   };
 }
 
 export function splitModelChannelGeneratorListSection(value) {
+  const seen = new Set();
   return String(value || "")
-    .split(/[\r\n,，；]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+    .split(/[\r\n,;；、]+/)
+    .map((entry) => String(entry || "").trim())
+    .filter((entry) => {
+      if (!entry || seen.has(entry)) {
+        return false;
+      }
+      seen.add(entry);
+      return true;
+    });
 }
 
 export function normalizeModelChannelGeneratorApiValueSection(

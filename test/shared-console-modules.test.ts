@@ -2,24 +2,35 @@ import { describe, expect, it, vi } from "vitest";
 import { JSDOM } from "jsdom";
 
 import {
+  addModelChannelDraftChannelSection,
+  addModelChannelDraftGroupSection,
   appendMultiUrlModelChannelRowSection,
   applyGeneratedMultiUrlRoundRobinGroupSection,
   buildMultiUrlModelChannelGenerationPlanSection,
   buildSingleModelChannelGeneratorPayloadSection,
   clearMultiUrlModelChannelRowsSection,
+  getModelChannelDraftExportTextSection,
   getModelChannelGeneratorModeSection,
   hydrateModelChannelGeneratorEditorFromSettingsSection,
   importBatchModelChannelGeneratorsAsRowsSection,
   normalizeModelChannelGeneratorApiValueSection,
   readMultiUrlModelChannelRowFieldSection,
+  removeModelChannelDraftChannelSection,
+  renderModelChannelDraftWorkbenchSection,
   renumberMultiUrlModelChannelRowsSection,
   setModelChannelGeneratorModeSection,
   splitModelChannelGeneratorListSection,
+  toggleModelChannelDraftGroupChannelSection,
+  updateModelChannelDraftChannelFieldSection,
+  updateModelChannelDraftGroupFieldSection,
+  updateModelChannelDraftModelsSection,
 } from "../apps/shared-console/model-channel-generator.js";
 import {
   bindModelChannelEventsSection,
   handleDetailModelChannelSubmitSection,
   handleModelChannelGenerateSubmitSection,
+  handleModelChannelsSubmitSection,
+  loadModelChannelConfigSection,
   renderModelChannelsPanelSection,
 } from "../apps/shared-console/model-channel-panel.js";
 import { renderDetailSection } from "../apps/shared-console/detail-panel.js";
@@ -132,7 +143,16 @@ function createPanelElements(document: Document) {
   const elements = {
     modelChannelsForm: document.createElement("form"),
     modelChannelsPanel: document.createElement("div"),
-    modelChannelsTextarea: document.createElement("textarea"),
+    modelChannelsExportTextarea: document.createElement("textarea"),
+    modelChannelsImportTextarea: document.createElement("textarea"),
+    modelChannelDraftSummary: document.createElement("div"),
+    modelChannelDraftEmptyState: document.createElement("div"),
+    modelChannelDraftChannels: document.createElement("div"),
+    modelChannelDraftGroups: document.createElement("div"),
+    addModelChannelDraftChannelButton: document.createElement("button"),
+    addModelChannelDraftGroupButton: document.createElement("button"),
+    copyModelChannelsExportButton: document.createElement("button"),
+    importModelChannelsButton: document.createElement("button"),
     userModelConfigCheckbox: document.createElement("input"),
     modelChannelGenerateModeSingleInput: document.createElement("input"),
     modelChannelGenerateModeMultiInput: document.createElement("input"),
@@ -809,6 +829,45 @@ describe("shared console detail flow helpers", () => {
 });
 
 describe("shared console panel helpers", () => {
+  it("renders and mutates the card-first draft workbench", () => {
+    const dom = createDom();
+    const elements = createPanelElements(dom.window.document);
+
+    let settings = defaultModelChannelSettingsSection();
+    settings = addModelChannelDraftChannelSection(settings);
+    settings = updateModelChannelDraftChannelFieldSection(settings, 0, "id", "alpha");
+    settings = updateModelChannelDraftChannelFieldSection(settings, 0, "name", "Alpha");
+    settings = updateModelChannelDraftChannelFieldSection(settings, 0, "baseUrl", "https://alpha.test/v1");
+    settings = updateModelChannelDraftModelsSection(settings, 0, "gpt-5-mini\ngpt-5");
+    settings = addModelChannelDraftChannelSection(settings);
+    settings = updateModelChannelDraftChannelFieldSection(settings, 1, "id", "beta");
+    settings = updateModelChannelDraftChannelFieldSection(settings, 1, "name", "Beta");
+    settings = addModelChannelDraftGroupSection(settings);
+    settings = updateModelChannelDraftGroupFieldSection(settings, 0, "id", "global-rr");
+    settings = updateModelChannelDraftGroupFieldSection(settings, 0, "name", "Global RR");
+    settings = toggleModelChannelDraftGroupChannelSection(settings, 0, "beta", true);
+
+    renderModelChannelDraftWorkbenchSection(elements, escapeHtml, settings);
+
+    expect(elements.modelChannelDraftSummary.innerHTML).toContain("2 个渠道 / 1 个轮询组");
+    expect(elements.modelChannelsExportTextarea.value).toBe(getModelChannelDraftExportTextSection(settings));
+    expect(elements.modelChannelsExportTextarea.value).toContain('"global-rr"');
+    expect(elements.modelChannelDraftChannels.querySelectorAll("[data-model-channel-index]")).toHaveLength(2);
+    expect(elements.modelChannelDraftGroups.querySelectorAll("[data-model-channel-group-index]")).toHaveLength(1);
+    expect(elements.modelChannelDraftEmptyState.classList.contains("hidden")).toBe(true);
+  });
+
+  it("removes empty round-robin groups when their last channel is deleted", () => {
+    let settings = defaultModelChannelSettingsSection();
+    settings = addModelChannelDraftChannelSection(settings);
+    settings = addModelChannelDraftGroupSection(settings);
+
+    const nextSettings = removeModelChannelDraftChannelSection(settings, 0);
+
+    expect(nextSettings.channels).toEqual([]);
+    expect(nextSettings.channelGroups).toEqual([]);
+  });
+
   it("locks the model channel panel outside admin mode but keeps reload available", () => {
     const dom = createDom();
     const elements = createPanelElements(dom.window.document);
@@ -833,7 +892,10 @@ describe("shared console panel helpers", () => {
     });
 
     expect(setRowsDisabled).toHaveBeenCalledWith(true);
-    expect(elements.modelChannelsTextarea.disabled).toBe(true);
+    expect(elements.addModelChannelDraftChannelButton.disabled).toBe(true);
+    expect(elements.importModelChannelsButton.disabled).toBe(true);
+    expect(elements.modelChannelsImportTextarea.disabled).toBe(true);
+    expect(elements.modelChannelsExportTextarea.disabled).toBe(true);
     expect(elements.reloadModelChannelsButton.disabled).toBe(false);
     expect(elements.modelChannelsPanel.textContent).toContain("Enter admin mode");
     expect(elements.modelChannelsPanel.textContent).toContain("先进入管理员模式");
@@ -877,7 +939,7 @@ describe("shared console panel helpers", () => {
       modelChannelSettings: {
         userCanConfigureModels: true,
         channels: [{ id: "alpha" }, { id: "beta" }],
-        channelGroups: [],
+        channelGroups: [{ id: "global-rr", channelIds: ["alpha", "beta"] }],
       },
       modelChannelSettingsText: '{"channels":[{"id":"alpha"},{"id":"beta"}]}',
       modelChannelEditorDirty: true,
@@ -896,9 +958,172 @@ describe("shared console panel helpers", () => {
     });
 
     expect(setRowsDisabled).toHaveBeenCalledWith(false);
+    expect(elements.addModelChannelDraftChannelButton.disabled).toBe(false);
+    expect(elements.importModelChannelsButton.disabled).toBe(false);
+    expect(elements.modelChannelsExportTextarea.disabled).toBe(true);
     expect(elements.modelChannelsPanel.textContent).toContain("已进入，可维护全局渠道");
     expect(elements.modelChannelsPanel.textContent).toContain("有未保存变更");
-    expect(elements.modelChannelsPanel.textContent).toContain("左侧明确区分单 URL 与多 URL 两种模式");
+    expect(elements.modelChannelsPanel.textContent).toContain("卡片是唯一主编辑区");
+    expect(elements.modelChannelsPanel.textContent).toContain("高级 JSON 只保留导入 / 导出");
+  });
+
+  it("saves global model channels from the object draft", async () => {
+    const dom = createDom();
+    const elements = createPanelElements(dom.window.document);
+    const event = { preventDefault: vi.fn() };
+    const setBusy = vi.fn();
+    const pushStatus = vi.fn();
+    const renderAll = vi.fn();
+    const loadInstances = vi.fn().mockResolvedValue(undefined);
+    const updateConnectionNote = vi.fn();
+    const draftSettings = {
+      userCanConfigureModels: true,
+      channels: [{ id: "alpha", name: "Alpha" }],
+      channelGroups: [],
+    };
+    const fetchJson = vi.fn().mockResolvedValue({
+      catalog: {
+        channels: [{ id: "alpha", name: "Alpha" }],
+        userCanConfigureModels: true,
+      },
+      settings: {
+        userCanConfigureModels: true,
+        channels: [{ id: "alpha", name: "Alpha" }, { id: "beta", name: "Beta" }],
+        channelGroups: [{ id: "global-rr", channelIds: ["alpha", "beta"] }],
+      },
+    });
+    const state = {
+      modelChannelCatalog: {
+        channels: [],
+        userCanConfigureModels: false,
+      },
+      modelChannelSettings: null,
+      modelChannelSettingsText: "",
+      modelChannelEditorDirty: true,
+      modelChannelEditorSyncSourceKey: null,
+    };
+    elements.autoUnassignRemovedModelChannelsCheckbox.checked = true;
+
+    await handleModelChannelsSubmitSection({
+      event,
+      isAdminModeEnabled: () => true,
+      pushStatus,
+      setBusy,
+      buildModelChannelSettingsDraft: () => draftSettings,
+      fetchJson,
+      elements,
+      state,
+      ensureModelChannelCatalogShape: ensureModelChannelCatalogShapeSection,
+      normalizeModelChannelSettingsForEditor: normalizeModelChannelSettingsForEditorSection,
+      renderAll,
+      formatModelChannelSaveDetail: () => "2 channels / 1 group",
+      loadInstances,
+      updateConnectionNote,
+    });
+
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(setBusy).toHaveBeenNthCalledWith(1, true);
+    expect(setBusy).toHaveBeenLastCalledWith(false);
+    expect(fetchJson).toHaveBeenCalledWith(
+      "/api/model-channels",
+      expect.objectContaining({
+        method: "PUT",
+        adminAuth: true,
+        body: expect.any(String),
+      }),
+    );
+    expect(JSON.parse(fetchJson.mock.calls[0][1].body)).toEqual({
+      settings: draftSettings,
+      autoUnassignRemovedChannels: true,
+    });
+    expect(state.modelChannelSettings).toEqual({
+      userCanConfigureModels: true,
+      channels: [{ id: "alpha", name: "Alpha" }, { id: "beta", name: "Beta" }],
+      channelGroups: [{ id: "global-rr", channelIds: ["alpha", "beta"] }],
+    });
+    expect(state.modelChannelEditorDirty).toBe(false);
+    expect(state.modelChannelSettingsText).toContain('"beta"');
+    expect(state.modelChannelEditorSyncSourceKey).toBe(JSON.stringify(state.modelChannelSettings));
+    expect(renderAll).toHaveBeenCalledOnce();
+    expect(loadInstances).toHaveBeenCalledWith({ preserveSelection: true });
+    expect(pushStatus).toHaveBeenCalledWith("success", "Saved global model channels", "2 channels / 1 group");
+    expect(updateConnectionNote).not.toHaveBeenCalled();
+  });
+
+  it("generates a model channel draft and replaces the current card draft", async () => {
+    const pushStatus = vi.fn();
+    const setBusy = vi.fn();
+    const fetchJson = vi.fn().mockResolvedValue({
+      settings: {
+        userCanConfigureModels: false,
+        channels: [{ id: "alpha" }, { id: "beta" }],
+        channelGroups: [{ id: "beta-rr", channelIds: ["beta"] }],
+      },
+      meta: {
+        generatedChannelIds: ["beta"],
+        generatedGroupId: "beta-rr",
+      },
+    });
+    const buildSingleModelChannelGeneratorPayload = vi.fn().mockReturnValue({
+      settings: { userCanConfigureModels: false, channels: [{ id: "alpha" }], channelGroups: [] },
+      generator: {
+        baseUrl: "https://beta.test/v1",
+        api: "openai-responses",
+        channelIdPrefix: "beta",
+        channelNamePrefix: "Beta",
+        apiKeys: "sk-beta",
+        modelIds: "gpt-5-mini",
+      },
+    });
+    const replaceModelChannelDraft = vi.fn();
+    const updateConnectionNote = vi.fn();
+
+    await handleModelChannelGenerateSubmitSection({
+      isAdminModeEnabled: () => true,
+      pushStatus,
+      setBusy,
+      buildModelChannelGeneratorBaseSettings: () => ({
+        userCanConfigureModels: false,
+        channels: [{ id: "alpha" }],
+        channelGroups: [],
+      }),
+      getModelChannelGeneratorMode: () => "single",
+      buildMultiUrlModelChannelGenerationPlan: vi.fn(),
+      fetchJson,
+      normalizeModelChannelSettingsForEditor: normalizeModelChannelSettingsForEditorSection,
+      buildSingleModelChannelGeneratorPayload,
+      applyGeneratedMultiUrlRoundRobinGroup: vi.fn(),
+      replaceModelChannelDraft,
+      updateConnectionNote,
+    });
+
+    expect(setBusy).toHaveBeenNthCalledWith(1, true);
+    expect(setBusy).toHaveBeenLastCalledWith(false);
+    expect(buildSingleModelChannelGeneratorPayload).toHaveBeenCalledOnce();
+    expect(fetchJson).toHaveBeenCalledWith(
+      "/api/model-channels/generate",
+      expect.objectContaining({
+        method: "POST",
+        adminAuth: true,
+        body: expect.any(String),
+      }),
+    );
+    expect(replaceModelChannelDraft).toHaveBeenCalledWith(
+      {
+        userCanConfigureModels: false,
+        channels: [{ id: "alpha" }, { id: "beta" }],
+        channelGroups: [{ id: "beta-rr", channelIds: ["beta"] }],
+      },
+      { dirty: true },
+    );
+    expect(pushStatus).toHaveBeenCalledWith(
+      "success",
+      "Generated model channel draft",
+      expect.stringContaining("草稿已更新，可直接保存。"),
+    );
+    expect(pushStatus.mock.calls[0]?.[2]).toContain("Channels: beta");
+    expect(pushStatus.mock.calls[0]?.[2]).toContain("Groups: beta-rr");
+    expect(updateConnectionNote).not.toHaveBeenCalled();
   });
 
   it("renders selected detail state with admin controls enabled", () => {
@@ -966,7 +1191,7 @@ describe("shared console panel helpers", () => {
     expect(updateSelectedInstanceModelChannel).toHaveBeenCalledWith("alpha");
   });
 
-  it("binds model channel events for mode switching, multi-url rows, reload, and detail clear in admin mode", async () => {
+  it("binds model channel events for mode switching, card editing, multi-url rows, reload, and detail clear in admin mode", async () => {
     const dom = createDom();
     const document = dom.window.document;
     const generatorElements = createGeneratorElements(document);
@@ -976,6 +1201,7 @@ describe("shared console panel helpers", () => {
       ...panelElements,
     };
     elements.modelChannelMultiPanel.classList.add("hidden");
+    elements.detailModelChannelSelect.innerHTML = '<option value="beta">beta</option>';
     const state = {
       modelChannelEditorDirty: false,
     };
@@ -986,9 +1212,54 @@ describe("shared console panel helpers", () => {
     const renderAll = vi.fn();
     const handleDetailModelChannelSubmit = vi.fn();
     const updateSelectedInstanceModelChannel = vi.fn();
+    const handleModelChannelUserConfigChange = vi.fn();
+    const addModelChannelDraftChannel = vi.fn();
+    const addModelChannelDraftGroup = vi.fn();
+    const removeModelChannelDraftChannel = vi.fn();
+    const removeModelChannelDraftGroup = vi.fn();
+    const updateModelChannelDraftChannelField = vi.fn();
+    const updateModelChannelDraftModels = vi.fn();
+    const updateModelChannelDraftGroupField = vi.fn();
+    const toggleModelChannelDraftGroupChannel = vi.fn();
+    const copyModelChannelDraftExport = vi.fn();
+    const importModelChannelDraft = vi.fn();
     const setModelChannelGenerateMode = vi.fn((mode: string) =>
       setModelChannelGeneratorModeSection(elements, mode),
     );
+
+    renderModelChannelDraftWorkbenchSection(elements, escapeHtml, {
+      userCanConfigureModels: false,
+      channels: [
+        {
+          id: "alpha",
+          name: "Alpha",
+          providerId: "alpha",
+          baseUrl: "https://alpha.test/v1",
+          api: "openai-responses",
+          apiKey: "sk-alpha",
+          models: [{ id: "gpt-5-mini" }],
+          defaultModel: "gpt-5-mini",
+        },
+        {
+          id: "beta",
+          name: "Beta",
+          providerId: "beta",
+          baseUrl: "https://beta.test/v1",
+          api: "openai-responses",
+          apiKey: "sk-beta",
+          models: [{ id: "gpt-5-mini" }],
+          defaultModel: "gpt-5-mini",
+        },
+      ],
+      channelGroups: [
+        {
+          id: "global-rr",
+          name: "Global RR",
+          strategy: "round-robin",
+          channelIds: ["alpha"],
+        },
+      ],
+    });
 
     bindModelChannelEventsSection({
       elements,
@@ -1009,6 +1280,17 @@ describe("shared console panel helpers", () => {
       handleDetailModelChannelSubmit,
       updateSelectedInstanceModelChannel,
       isAdminModeEnabled: () => true,
+      handleModelChannelUserConfigChange,
+      addModelChannelDraftChannel,
+      addModelChannelDraftGroup,
+      removeModelChannelDraftChannel,
+      removeModelChannelDraftGroup,
+      updateModelChannelDraftChannelField,
+      updateModelChannelDraftModels,
+      updateModelChannelDraftGroupField,
+      toggleModelChannelDraftGroupChannel,
+      copyModelChannelDraftExport,
+      importModelChannelDraft,
     });
 
     elements.modelChannelsForm.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
@@ -1052,12 +1334,66 @@ describe("shared console panel helpers", () => {
     expect(pushStatus).toHaveBeenCalledWith("info", "Cleared multi URL rows", "Multi URL mode is now empty.");
     expect(elements.modelChannelMultiRows.querySelectorAll(".channel-multi-row")).toHaveLength(0);
 
-    elements.modelChannelsTextarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-    expect(state.modelChannelEditorDirty).toBe(true);
-
-    state.modelChannelEditorDirty = false;
     elements.userModelConfigCheckbox.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-    expect(state.modelChannelEditorDirty).toBe(true);
+    expect(handleModelChannelUserConfigChange).toHaveBeenCalledOnce();
+
+    elements.addModelChannelDraftChannelButton.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true }),
+    );
+    expect(addModelChannelDraftChannel).toHaveBeenCalledOnce();
+
+    elements.addModelChannelDraftGroupButton.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true }),
+    );
+    expect(addModelChannelDraftGroup).toHaveBeenCalledOnce();
+
+    elements.copyModelChannelsExportButton.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true }),
+    );
+    expect(copyModelChannelDraftExport).toHaveBeenCalledOnce();
+
+    elements.importModelChannelsButton.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true }),
+    );
+    expect(importModelChannelDraft).toHaveBeenCalledOnce();
+
+    const channelNameInput = elements.modelChannelDraftChannels.querySelector(
+      '[data-channel-index="0"][data-field="name"]',
+    ) as HTMLInputElement;
+    channelNameInput.value = "Alpha Prime";
+    channelNameInput.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    expect(updateModelChannelDraftChannelField).toHaveBeenCalledWith(0, "name", "Alpha Prime");
+
+    const channelModelsTextarea = elements.modelChannelDraftChannels.querySelector(
+      'textarea[data-channel-index="0"][data-field="models"]',
+    ) as HTMLTextAreaElement;
+    channelModelsTextarea.value = "gpt-5-mini\ngpt-5";
+    channelModelsTextarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    expect(updateModelChannelDraftModels).toHaveBeenCalledWith(0, "gpt-5-mini\ngpt-5");
+
+    elements.modelChannelDraftChannels.querySelector('[data-action="remove-model-channel-draft-channel"]')?.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true }),
+    );
+    expect(removeModelChannelDraftChannel).toHaveBeenCalledWith(0);
+
+    const groupNameInput = elements.modelChannelDraftGroups.querySelector(
+      '[data-group-index="0"][data-field="name"]',
+    ) as HTMLInputElement;
+    groupNameInput.value = "Global Round Robin";
+    groupNameInput.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    expect(updateModelChannelDraftGroupField).toHaveBeenCalledWith(0, "name", "Global Round Robin");
+
+    const groupCheckbox = elements.modelChannelDraftGroups.querySelector(
+      '[data-action="toggle-model-channel-draft-group-member"][data-channel-id="beta"]',
+    ) as HTMLInputElement;
+    groupCheckbox.checked = true;
+    groupCheckbox.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    expect(toggleModelChannelDraftGroupChannel).toHaveBeenCalledWith(0, "beta", true);
+
+    elements.modelChannelDraftGroups.querySelector('[data-action="remove-model-channel-draft-group"]')?.dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true }),
+    );
+    expect(removeModelChannelDraftGroup).toHaveBeenCalledWith(0);
 
     elements.generateModelChannelsButton.dispatchEvent(
       new dom.window.MouseEvent("click", { bubbles: true }),
@@ -1122,6 +1458,17 @@ describe("shared console reload gating", () => {
       handleDetailModelChannelSubmit: vi.fn(),
       updateSelectedInstanceModelChannel: vi.fn(),
       isAdminModeEnabled: () => false,
+      handleModelChannelUserConfigChange: vi.fn(),
+      addModelChannelDraftChannel: vi.fn(),
+      addModelChannelDraftGroup: vi.fn(),
+      removeModelChannelDraftChannel: vi.fn(),
+      removeModelChannelDraftGroup: vi.fn(),
+      updateModelChannelDraftChannelField: vi.fn(),
+      updateModelChannelDraftModels: vi.fn(),
+      updateModelChannelDraftGroupField: vi.fn(),
+      toggleModelChannelDraftGroupChannel: vi.fn(),
+      copyModelChannelDraftExport: vi.fn(),
+      importModelChannelDraft: vi.fn(),
     });
 
     elements.reloadModelChannelsButton.dispatchEvent(
@@ -1132,5 +1479,91 @@ describe("shared console reload gating", () => {
     expect(pushStatus).toHaveBeenCalledWith("error", "Reload failed", "请先进入管理员模式。", "channels");
     expect(loadModelChannelConfig).not.toHaveBeenCalled();
     expect(renderAll).not.toHaveBeenCalled();
+  });
+
+  it("reloads model channel config into draft state", async () => {
+    const state = {
+      modelChannelCatalog: { channels: [], userCanConfigureModels: false },
+      modelChannelSettings: null,
+      modelChannelSettingsText: "",
+      modelChannelEditorDirty: true,
+    };
+    const pushStatus = vi.fn();
+    const fetchJson = vi.fn().mockResolvedValue({
+      admin: true,
+      catalog: {
+        channels: [{ id: "alpha", name: "Alpha" }],
+        userCanConfigureModels: true,
+      },
+      settings: {
+        userCanConfigureModels: true,
+        channels: [{ id: "alpha", name: "Alpha" }],
+        channelGroups: [{ id: "global-rr", channelIds: ["alpha"] }],
+      },
+    });
+
+    const payload = await loadModelChannelConfigSection({
+      state,
+      announce: true,
+      fetchJson,
+      isAdminModeEnabled: () => true,
+      ensureModelChannelCatalogShape: ensureModelChannelCatalogShapeSection,
+      normalizeModelChannelSettingsForEditor: normalizeModelChannelSettingsForEditorSection,
+      pushStatus,
+    });
+
+    expect(fetchJson).toHaveBeenCalledWith("/api/model-channels", { adminAuth: true });
+    expect(payload.settings.channelGroups[0].id).toBe("global-rr");
+    expect(state.modelChannelCatalog).toEqual({
+      channels: [
+        {
+          id: "alpha",
+          name: "Alpha",
+          kind: "channel",
+          providerId: "",
+          defaultModel: "",
+          channelCount: null,
+          strategy: "",
+        },
+      ],
+      userCanConfigureModels: true,
+    });
+    expect(state.modelChannelSettings).toEqual({
+      userCanConfigureModels: true,
+      channels: [{ id: "alpha", name: "Alpha" }],
+      channelGroups: [{ id: "global-rr", channelIds: ["alpha"] }],
+    });
+    expect(state.modelChannelSettingsText).toContain('"global-rr"');
+    expect(state.modelChannelEditorDirty).toBe(false);
+    expect(pushStatus).toHaveBeenCalledWith("info", "Reloaded model channels", "1 channels / user config enabled");
+  });
+
+  it("keeps JSON export in sync with imported draft content", () => {
+    const dom = createDom();
+    const elements = createPanelElements(dom.window.document);
+    const imported = normalizeModelChannelSettingsForEditorSection({
+      userCanConfigureModels: true,
+      channels: [
+        {
+          id: "alpha",
+          name: "Alpha",
+          providerId: "alpha",
+          baseUrl: "https://alpha.test/v1",
+          api: "openai-responses",
+          apiKey: "sk-alpha",
+          models: [{ id: "gpt-5-mini" }],
+          defaultModel: "gpt-5-mini",
+        },
+      ],
+      channelGroups: [{ id: "global-rr", name: "Global RR", strategy: "round-robin", channelIds: ["alpha"] }],
+    });
+
+    renderModelChannelDraftWorkbenchSection(elements, escapeHtml, imported);
+
+    const exported = JSON.parse(elements.modelChannelsExportTextarea.value);
+    expect(exported).toEqual(imported);
+    expect(elements.modelChannelDraftSummary.textContent).toContain("1 个渠道 / 1 个轮询组");
+    expect(elements.modelChannelDraftChannels.textContent).toContain("Alpha");
+    expect(elements.modelChannelDraftGroups.textContent).toContain("Global RR");
   });
 });

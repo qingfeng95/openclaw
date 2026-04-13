@@ -715,6 +715,9 @@ describe("shared console api", () => {
         });
         expect(configFile.agents.defaults).toMatchObject({
           model: "openai-main/gpt-5-mini",
+          models: {
+            "openai-main/gpt-5-mini": {},
+          },
         });
       } finally {
         await stopServer(server);
@@ -892,6 +895,137 @@ describe("shared console api", () => {
     });
   });
 
+  it("rewrites saved instance allowlists when channel contents change", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const modelChannelsPath = path.join(root, "model-channels.json");
+      await fs.writeFile(
+        modelChannelsPath,
+        JSON.stringify(
+          {
+            userCanConfigureModels: false,
+            channels: [
+              {
+                id: "openai-main",
+                name: "OpenAI Main",
+                providerId: "openai-main",
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "sk-secret",
+                api: "openai-responses",
+                models: [
+                  {
+                    id: "gpt-5-mini",
+                    name: "GPT-5 mini",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 128000,
+                    maxTokens: 16000,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+                defaultModel: "openai-main/gpt-5-mini",
+              },
+            ],
+            channelGroups: [],
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      await writeInstance(root, {
+        id: "alpha",
+        name: "Alpha",
+        modelChannelId: "openai-main",
+        port: 19111,
+      });
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        modelChannelsPath,
+        adminToken: "console-admin-secret",
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/model-channels`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+          body: JSON.stringify({
+            settings: {
+              userCanConfigureModels: false,
+              channels: [
+                {
+                  id: "openai-main",
+                  name: "DeepSeek Main",
+                  providerId: "deepseek-main",
+                  baseUrl: "https://deepseek.example/v1",
+                  apiKey: "sk-deepseek",
+                  api: "openai-responses",
+                  models: [
+                    {
+                      id: "deepseek-chat",
+                      name: "DeepSeek Chat",
+                      reasoning: true,
+                      input: ["text"],
+                      contextWindow: 128000,
+                      maxTokens: 16000,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    },
+                  ],
+                  defaultModel: "deepseek-main/deepseek-chat",
+                },
+              ],
+              channelGroups: [],
+            },
+            autoUnassignRemovedChannels: false,
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const payload = await response.json();
+        expect(payload.meta.affectedInstances).toEqual([
+          {
+            id: "alpha",
+            pool: "shared",
+            restartRequired: false,
+          },
+        ]);
+
+        const configFile = JSON.parse(
+          await fs.readFile(path.join(root, "alpha", "config", "openclaw.instance.json5"), "utf8"),
+        );
+        expect(configFile.models.providers).toEqual({
+          "deepseek-main": {
+            baseUrl: "https://deepseek.example/v1",
+            apiKey: "sk-deepseek",
+            api: "openai-responses",
+            models: [
+              {
+                id: "deepseek-chat",
+                name: "DeepSeek Chat",
+                reasoning: true,
+                input: ["text"],
+                contextWindow: 128000,
+                maxTokens: 16000,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        });
+        expect(configFile.agents.defaults).toEqual({
+          model: "deepseek-main/deepseek-chat",
+          models: {
+            "deepseek-main/deepseek-chat": {},
+          },
+        });
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
   it("creates instances with a mapped channel group and writes a rotating config", async () => {
     await withTempInstancesRoot(async (root) => {
       const modelChannelsPath = path.join(root, "model-channels.json");
@@ -1010,6 +1144,10 @@ describe("shared console api", () => {
             strategy: "round-robin",
             stateFile: "shared-console-model-rotation.json",
           },
+        });
+        expect(configFile.agents.defaults.models).toEqual({
+          "ice-a/gpt-5.4": {},
+          "ice-b/gpt-5.4": {},
         });
       } finally {
         await stopServer(server);

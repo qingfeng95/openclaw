@@ -77,6 +77,38 @@ export async function updateSelectedInstanceModelChannelSection(params) {
   }
 }
 
+export function updateGenerateButtonTextSection(elements) {
+  const generateButton = elements.generateModelChannelsButton;
+  const buttonText = document.querySelector("#generate-model-channels-button-text");
+  const buttonHint = document.querySelector("#generate-model-channels-button-hint");
+
+  if (!generateButton || !buttonText) {
+    return;
+  }
+
+  const mode = elements.modelChannelGenerateModeSingleInput?.checked ? "single" : "multi";
+  const hasRoundRobin = elements.modelChannelGenerateRoundRobinCheckbox?.checked ?? false;
+
+  if (mode === "single") {
+    if (hasRoundRobin) {
+      buttonText.textContent = "生成渠道 + 轮询组";
+      if (buttonHint) {
+        buttonHint.textContent = "将生成多个渠道并自动创建轮询组";
+      }
+    } else {
+      buttonText.textContent = "生成渠道到草稿";
+      if (buttonHint) {
+        buttonHint.textContent = "将生成渠道添加到上方草稿卡片";
+      }
+    }
+  } else {
+    buttonText.textContent = "生成多 URL 轮询组";
+    if (buttonHint) {
+      buttonHint.textContent = "将生成所有 URL 的渠道并创建统一轮询组";
+    }
+  }
+}
+
 export function renderModelChannelsPanelSection(params) {
   const {
     state,
@@ -88,7 +120,6 @@ export function renderModelChannelsPanelSection(params) {
 
   if (
     !elements.modelChannelsPanel ||
-    !elements.modelChannelsTextarea ||
     !elements.userModelConfigCheckbox ||
     !elements.reloadModelChannelsButton ||
     !elements.saveModelChannelsButton
@@ -103,13 +134,9 @@ export function renderModelChannelsPanelSection(params) {
       state.modelChannelSettings?.userCanConfigureModels ?? state.modelChannelCatalog.userCanConfigureModels,
     );
   }
-  if (!state.modelChannelEditorDirty && (!elements.modelChannelsTextarea.value || adminEnabled)) {
-    elements.modelChannelsTextarea.value = state.modelChannelSettingsText || JSON.stringify(settings, null, 2);
-  }
 
   const toggleTargets = [
     elements.userModelConfigCheckbox,
-    elements.modelChannelsTextarea,
     elements.modelChannelGenerateModeSingleInput,
     elements.modelChannelGenerateModeMultiInput,
     elements.modelChannelSingleBaseUrlInput,
@@ -129,6 +156,11 @@ export function renderModelChannelsPanelSection(params) {
     elements.importModelChannelBatchButton,
     elements.clearModelChannelMultiRowsButton,
     elements.generateModelChannelsButton,
+    elements.addModelChannelDraftChannelButton,
+    elements.addModelChannelDraftGroupButton,
+    elements.copyModelChannelsExportButton,
+    elements.modelChannelsImportTextarea,
+    elements.importModelChannelsButton,
     elements.autoUnassignRemovedModelChannelsCheckbox,
     elements.saveModelChannelsButton,
   ];
@@ -140,15 +172,22 @@ export function renderModelChannelsPanelSection(params) {
   if (elements.reloadModelChannelsButton) {
     elements.reloadModelChannelsButton.disabled = !state.adminModeAvailable;
   }
+  if (elements.modelChannelsExportTextarea) {
+    elements.modelChannelsExportTextarea.disabled = true;
+  }
   setModelChannelGenerateRowsDisabled(!adminEnabled);
 
   const channelCount = state.modelChannelCatalog.channels.length;
+  const draftChannelCount = Array.isArray(settings.channels) ? settings.channels.length : 0;
+  const draftGroupCount = Array.isArray(settings.channelGroups) ? settings.channelGroups.length : 0;
   const userConfigLabel = state.modelChannelCatalog.userCanConfigureModels ? "允许" : "关闭";
   const draftStateLabel = state.modelChannelEditorDirty ? "有未保存变更" : "已与当前配置同步";
 
+  const panelToneClass = adminEnabled ? " channel-status-panel-live" : " channel-status-panel-locked";
+
   if (!state.adminModeAvailable) {
     elements.modelChannelsPanel.innerHTML = `
-      <div class="channel-status-summary">
+      <div class="channel-status-summary${panelToneClass}">
         <article class="channel-status-card">
           <span class="channel-status-label">管理员模式</span>
           <div class="channel-status-value">服务端未启用</div>
@@ -175,7 +214,7 @@ export function renderModelChannelsPanelSection(params) {
 
   if (!adminEnabled) {
     elements.modelChannelsPanel.innerHTML = `
-      <div class="channel-status-summary">
+      <div class="channel-status-summary${panelToneClass}">
         <article class="channel-status-card">
           <span class="channel-status-label">管理员模式</span>
           <div class="channel-status-value">未进入</div>
@@ -190,7 +229,7 @@ export function renderModelChannelsPanelSection(params) {
         </article>
         <article class="channel-status-card">
           <span class="channel-status-label">下一步</span>
-          <div class="channel-status-value">先进入管理员模式，再选择单 URL 或多 URL 模式生成草稿。</div>
+          <div class="channel-status-value">先进入管理员模式，再维护草稿卡片；需要批量起草时可展开快速生成辅助器。</div>
         </article>
       </div>
       <div class="channel-status-actions">
@@ -201,7 +240,7 @@ export function renderModelChannelsPanelSection(params) {
   }
 
   elements.modelChannelsPanel.innerHTML = `
-    <div class="channel-status-summary">
+    <div class="channel-status-summary${panelToneClass}">
       <article class="channel-status-card">
         <span class="channel-status-label">管理员模式</span>
         <div class="channel-status-value">已进入，可维护全局渠道</div>
@@ -211,8 +250,8 @@ export function renderModelChannelsPanelSection(params) {
         <div class="channel-status-value">${channelCount}</div>
       </article>
       <article class="channel-status-card">
-        <span class="channel-status-label">用户自定义模型</span>
-        <div class="channel-status-value">${userConfigLabel}</div>
+        <span class="channel-status-label">草稿内容</span>
+        <div class="channel-status-value">${draftChannelCount} 个渠道 / ${draftGroupCount} 个轮询组</div>
       </article>
       <article class="channel-status-card">
         <span class="channel-status-label">草稿状态</span>
@@ -220,7 +259,7 @@ export function renderModelChannelsPanelSection(params) {
       </article>
     </div>
     <div class="channel-status-actions">
-      <div class="callout">左侧明确区分单 URL 与多 URL 两种模式，生成后右侧 JSON 会立即更新；确认无误后再保存全局渠道。</div>
+      <div class="callout">卡片是唯一主编辑区；快速生成辅助器只负责批量补草稿，高级 JSON 只保留导入 / 导出。</div>
     </div>
   `;
 }
@@ -264,6 +303,7 @@ export function handleModelChannelsSubmitSection(params) {
       state.modelChannelSettings = normalizeModelChannelSettingsForEditor(payload?.settings ?? settings);
       state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
       state.modelChannelEditorDirty = false;
+      state.modelChannelEditorSyncSourceKey = JSON.stringify(state.modelChannelSettings);
       renderAll();
       pushStatus("success", "Saved global model channels", formatModelChannelSaveDetail(payload));
       await loadInstances({ preserveSelection: true });
@@ -292,9 +332,7 @@ export function handleModelChannelGenerateSubmitSection(params) {
     normalizeModelChannelSettingsForEditor,
     buildSingleModelChannelGeneratorPayload,
     applyGeneratedMultiUrlRoundRobinGroup,
-    elements,
-    state,
-    renderAll,
+    replaceModelChannelDraft,
     updateConnectionNote,
   } = params;
 
@@ -351,13 +389,7 @@ export function handleModelChannelGenerateSubmitSection(params) {
         }
       }
 
-      state.modelChannelSettings = nextSettings;
-      state.modelChannelSettingsText = JSON.stringify(state.modelChannelSettings, null, 2);
-      if (elements.modelChannelsTextarea) {
-        elements.modelChannelsTextarea.value = state.modelChannelSettingsText;
-      }
-      state.modelChannelEditorDirty = true;
-      renderAll();
+      replaceModelChannelDraft(nextSettings, { dirty: true });
       const detailParts = [];
       const uniqueChannelIds = [...new Set(generatedChannelIds.map((channelId) => String(channelId || "").trim()).filter(Boolean))];
       const uniqueGroupIds = [...new Set(generatedGroupIds.map((groupId) => String(groupId || "").trim()).filter(Boolean))];
@@ -367,7 +399,7 @@ export function handleModelChannelGenerateSubmitSection(params) {
       if (uniqueGroupIds.length > 0) {
         detailParts.push(`Groups: ${uniqueGroupIds.join(", ")}`);
       }
-      detailParts.push("Draft JSON updated. Save to persist.");
+      detailParts.push("草稿已更新，可直接保存。");
       pushStatus("success", "Generated model channel draft", detailParts.join(" "));
     } catch (error) {
       pushStatus("error", "Failed to generate model channels", error.message);
@@ -404,6 +436,17 @@ export function bindModelChannelEventsSection(params) {
     handleDetailModelChannelSubmit,
     updateSelectedInstanceModelChannel,
     isAdminModeEnabled,
+    handleModelChannelUserConfigChange,
+    addModelChannelDraftChannel,
+    addModelChannelDraftGroup,
+    removeModelChannelDraftChannel,
+    removeModelChannelDraftGroup,
+    updateModelChannelDraftChannelField,
+    updateModelChannelDraftModels,
+    updateModelChannelDraftGroupField,
+    toggleModelChannelDraftGroupChannel,
+    copyModelChannelDraftExport,
+    importModelChannelDraft,
   } = params;
 
   elements.modelChannelsForm?.addEventListener("submit", (event) => {
@@ -412,12 +455,17 @@ export function bindModelChannelEventsSection(params) {
   elements.modelChannelGenerateModeSingleInput?.addEventListener("change", () => {
     if (elements.modelChannelGenerateModeSingleInput.checked) {
       setModelChannelGenerateMode("single");
+      updateGenerateButtonTextSection(elements);
     }
   });
   elements.modelChannelGenerateModeMultiInput?.addEventListener("change", () => {
     if (elements.modelChannelGenerateModeMultiInput.checked) {
       setModelChannelGenerateMode("multi");
+      updateGenerateButtonTextSection(elements);
     }
+  });
+  elements.modelChannelGenerateRoundRobinCheckbox?.addEventListener("change", () => {
+    updateGenerateButtonTextSection(elements);
   });
   elements.addModelChannelMultiRowButton?.addEventListener("click", (event) => {
     event.preventDefault();
@@ -474,11 +522,8 @@ export function bindModelChannelEventsSection(params) {
     clearMultiUrlModelChannelRows();
     pushStatus("info", "Cleared multi URL rows", "Multi URL mode is now empty.");
   });
-  elements.modelChannelsTextarea?.addEventListener("input", () => {
-    state.modelChannelEditorDirty = true;
-  });
   elements.userModelConfigCheckbox?.addEventListener("change", () => {
-    state.modelChannelEditorDirty = true;
+    handleModelChannelUserConfigChange();
   });
   elements.generateModelChannelsButton?.addEventListener("click", () => {
     void handleModelChannelGenerateSubmit();
@@ -493,6 +538,81 @@ export function bindModelChannelEventsSection(params) {
       .catch((error) => {
         pushStatus("error", "Reload failed", error.message);
       });
+  });
+  elements.addModelChannelDraftChannelButton?.addEventListener("click", () => {
+    addModelChannelDraftChannel();
+  });
+  elements.addModelChannelDraftGroupButton?.addEventListener("click", () => {
+    addModelChannelDraftGroup();
+  });
+  elements.copyModelChannelsExportButton?.addEventListener("click", () => {
+    void copyModelChannelDraftExport();
+  });
+  elements.importModelChannelsButton?.addEventListener("click", () => {
+    importModelChannelDraft();
+  });
+  const handleDraftClick = (event) => {
+    const target = event.target;
+    if (!target || typeof target !== "object" || !("closest" in target)) {
+      return;
+    }
+    const actionButton = target.closest("[data-action]");
+    if (!actionButton) {
+      return;
+    }
+    const action = actionButton.getAttribute("data-action");
+    if (action === "remove-model-channel-draft-channel") {
+      removeModelChannelDraftChannel(Number(actionButton.getAttribute("data-channel-index") || "-1"));
+      return;
+    }
+    if (action === "remove-model-channel-draft-group") {
+      removeModelChannelDraftGroup(Number(actionButton.getAttribute("data-group-index") || "-1"));
+    }
+  };
+  elements.modelChannelDraftChannels?.addEventListener("click", handleDraftClick);
+  elements.modelChannelDraftGroups?.addEventListener("click", handleDraftClick);
+  elements.modelChannelDraftChannels?.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!target || typeof target !== "object" || !("getAttribute" in target)) {
+      return;
+    }
+    const channelIndex = Number(target.getAttribute("data-channel-index") || "-1");
+    const field = target.getAttribute("data-field") || "";
+    if (channelIndex < 0 || !field) {
+      return;
+    }
+    if (field === "models") {
+      updateModelChannelDraftModels(channelIndex, target.value);
+      return;
+    }
+    updateModelChannelDraftChannelField(channelIndex, field, target.value);
+  });
+  elements.modelChannelDraftGroups?.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!target || typeof target !== "object" || !("getAttribute" in target)) {
+      return;
+    }
+    const groupIndex = Number(target.getAttribute("data-group-index") || "-1");
+    const field = target.getAttribute("data-field") || "";
+    if (groupIndex < 0 || !field) {
+      return;
+    }
+    updateModelChannelDraftGroupField(groupIndex, field, target.value);
+  });
+  elements.modelChannelDraftGroups?.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!target || typeof target !== "object" || !("getAttribute" in target)) {
+      return;
+    }
+    const action = target.getAttribute("data-action") || "";
+    if (action !== "toggle-model-channel-draft-group-member") {
+      return;
+    }
+    toggleModelChannelDraftGroupChannel(
+      Number(target.getAttribute("data-group-index") || "-1"),
+      target.getAttribute("data-channel-id") || "",
+      Boolean(target.checked),
+    );
   });
   elements.detailModelChannelForm?.addEventListener("submit", (event) => {
     void handleDetailModelChannelSubmit(event);

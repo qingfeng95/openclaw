@@ -693,8 +693,12 @@ async function handleInstanceDiagnosticsRequest(
   if ((req.method ?? "GET").toUpperCase() !== "GET") {
     throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
   }
+  const refreshRequested = readBooleanQuery(new URL(req.url || "", "http://localhost"), "refresh", false);
   const item = await ensureInstance(config, deps, route.pool, route.id, false);
-  const probe = await readSharedInstanceDiagnostics(item, resolveDiagnosticsOptions(config, deps));
+  const probe = await readSharedInstanceDiagnostics(item, {
+    ...resolveDiagnosticsOptions(config, deps),
+    cacheTtlMs: refreshRequested ? 0 : config.diagnosticsCacheTtlMs,
+  });
   sendJson(res, 200, {
     ok: true,
     item: {

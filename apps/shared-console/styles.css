@@ -1118,9 +1118,12 @@ a {
 }
 
 .generator-card-grid,
-.meta-grid,
-.probe-grid {
+.meta-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.probe-grid {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .field-span-2 {

@@ -188,6 +188,9 @@ export function renderDetailEmptyStateSection({ elements, renderPairingSummary, 
 
 export function renderDetailActionStateSection(params) {
   const { elements, state, item, canOpenInstanceUi, instanceRuntimeLocation, isAdminModeEnabled } = params;
+  if (elements.refreshDiagnosticsButton) {
+    elements.refreshDiagnosticsButton.disabled = !item || state.selectedDiagnosticsLoading;
+  }
   if (elements.openUiButton) {
     elements.openUiButton.disabled = !canOpenInstanceUi(item);
     elements.openUiButton.title =

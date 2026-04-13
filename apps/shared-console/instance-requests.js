@@ -57,6 +57,7 @@ export async function loadInstanceDiagnosticsSection(params) {
     buildDiagnosticsFailureProbe,
     isCurrentDetailRequest,
     renderDetail,
+    options = {},
   } = params;
 
   if (!isCurrentDetailRequest(state, scope, id, requestToken)) {
@@ -64,7 +65,11 @@ export async function loadInstanceDiagnosticsSection(params) {
   }
 
   try {
-    const payload = await fetchJson(`${instanceApiBase(scope)}/${encodeURIComponent(id)}/diagnostics`);
+    const forceRefresh = options?.forceRefresh === true;
+    const diagnosticsPath = forceRefresh
+      ? `${instanceApiBase(scope)}/${encodeURIComponent(id)}/diagnostics?refresh=1`
+      : `${instanceApiBase(scope)}/${encodeURIComponent(id)}/diagnostics`;
+    const payload = await fetchJson(diagnosticsPath);
     applySelectedInstanceDiagnostics(state, scope, id, requestToken, payload?.item?.probe ?? null);
   } catch (error) {
     applySelectedInstanceDiagnostics(state, scope, id, requestToken, buildDiagnosticsFailureProbe(error.message));

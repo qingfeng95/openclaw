@@ -257,6 +257,7 @@ const elements = {
   probeGrid: document.querySelector("#probe-grid"),
   pairingSummary: document.querySelector("#pairing-summary"),
   usageSummary: document.querySelector("#usage-summary"),
+  refreshDiagnosticsButton: document.querySelector("#refresh-diagnostics-button"),
   createForm: document.querySelector("#create-form"),
   statusFeed: document.querySelector("#status-feed"),
 };
@@ -1388,7 +1389,7 @@ async function loadInstanceDetail(scope, id, announce = true) {
   });
 }
 
-async function loadInstanceDiagnostics(scope, id, requestToken = state.detailRequestToken) {
+async function loadInstanceDiagnostics(scope, id, requestToken = state.detailRequestToken, options = {}) {
   return loadInstanceDiagnosticsSection({
     state,
     scope,
@@ -1400,6 +1401,7 @@ async function loadInstanceDiagnostics(scope, id, requestToken = state.detailReq
     buildDiagnosticsFailureProbe,
     isCurrentDetailRequest,
     renderDetail,
+    options,
   });
 }
 
@@ -2031,6 +2033,20 @@ function bindEvents() {
   });
   elements.restartButton.addEventListener("click", () => {
     void runSelectedInstanceAction("restart");
+  });
+  elements.refreshDiagnosticsButton?.addEventListener("click", () => {
+    if (!state.selectedId) {
+      return;
+    }
+    state.selectedDiagnosticsLoading = true;
+    renderDetail();
+    void loadInstanceDiagnostics(state.selectedScope, state.selectedId, state.detailRequestToken, { forceRefresh: true })
+      .then(() => {
+        pushStatus("info", `已刷新 ${state.selectedId} 值班检查结果`, "已跳过缓存并重新探测实例健康。", "instances");
+      })
+      .catch((error) => {
+        pushStatus("error", `刷新 ${state.selectedId} 值班检查结果失败`, error.message, "instances");
+      });
   });
   elements.autoRefreshCheckbox.addEventListener("change", (event) => {
     configureAutoRefresh(event.currentTarget.checked);

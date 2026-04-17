@@ -1458,6 +1458,19 @@ async function handleContainerAction(
   const result = await runSharedConsoleContainerAction(id, action, instances, {
     listDockerContainers: deps.listDockerContainers,
     runDockerCommand: deps.runDockerCommand,
+    restartInstances: async (containerName, instanceIds) => {
+      for (const instanceId of instanceIds) {
+        const instance = instances.find((inst) => inst.id === instanceId);
+        if (!instance) {
+          continue;
+        }
+        const pool = instance.pool === "dedicated" ? "dedicated" : "shared";
+        await runOpsCommand(config, deps, {
+          scriptName: "restart-instance.sh",
+          args: [instanceId, "--root", resolveInstancesRoot(config, pool)],
+        });
+      }
+    },
   });
   sendJson(res, 200, {
     ok: true,
@@ -1469,6 +1482,7 @@ async function handleContainerAction(
       stderr: result.command.stderr.trim(),
       exitCode: result.command.exitCode,
     },
+    restartedInstances: result.restartedInstances,
   });
 }
 

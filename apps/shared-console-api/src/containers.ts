@@ -373,10 +373,14 @@ export async function runSharedConsoleContainerAction(
   selector: string,
   action: "start" | "stop" | "restart",
   instances: SharedInstanceRecord[],
-  options: ListSharedConsoleContainersOptions & RunDockerCommandOptions = {},
+  options: ListSharedConsoleContainersOptions &
+    RunDockerCommandOptions & {
+      restartInstances?: (containerName: string, instanceIds: string[]) => Promise<void>;
+    } = {},
 ): Promise<{
   container: SharedConsoleContainerRecord;
   command: DockerCommandResult;
+  restartedInstances?: string[];
 }> {
   const container = await getSharedConsoleContainerBySelector(selector, instances, options);
   if (!container) {
@@ -392,9 +396,24 @@ export async function runSharedConsoleContainerAction(
   if (command.exitCode !== 0) {
     throw new Error(command.stderr.trim() || command.stdout.trim() || `docker ${action} failed`);
   }
+
+  // Auto-restart instances after container restart
+  let restartedInstances: string[] | undefined;
+  if (action === "restart" && container.attachedInstances.length > 0 && options.restartInstances) {
+    const instanceIds = container.attachedInstances.map((inst) => inst.id);
+    try {
+      await options.restartInstances(container.name, instanceIds);
+      restartedInstances = instanceIds;
+    } catch (error) {
+      // Log but don't fail the container restart
+      console.error(`Failed to restart instances after container restart: ${error}`);
+    }
+  }
+
   return {
     container,
     command,
+    restartedInstances,
   };
 }
 

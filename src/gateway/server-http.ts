@@ -32,6 +32,7 @@ import { normalizeCanvasScopedUrl } from "./canvas-capability.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
+  resolveControlUiRootWithRetry,
   type ControlUiRootState,
 } from "./control-ui.js";
 import { handleOpenAiEmbeddingsHttpRequest } from "./embeddings-http.js";
@@ -973,6 +974,7 @@ export function createGatewayHttpServer(opts: {
               basePath: controlUiBasePath,
               config: configSnapshot,
               root: controlUiRoot,
+              resolveRoot: () => resolveControlUiRootWithRetry(),
             }),
         });
       }

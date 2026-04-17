@@ -4,13 +4,16 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
+  ensureControlUiAssetsBuilt,
   isPackageProvenControlUiRootSync,
+  resolveControlUiDistIndexHealth,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -34,11 +37,19 @@ const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSETS_MISSING_MESSAGE =
   "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
 
+export type ControlUiAssetsRepairResult = {
+  ok: boolean;
+  rebuilt: boolean;
+  root?: string | null;
+  message?: string;
+};
+
 export type ControlUiRequestOptions = {
   basePath?: string;
   config?: OpenClawConfig;
   agentId?: string;
   root?: ControlUiRootState;
+  resolveRoot?: () => Promise<ControlUiRootState | null> | ControlUiRootState | null;
 };
 
 export type ControlUiRootState =
@@ -305,6 +316,56 @@ function isSafeRelativePath(relPath: string) {
   return true;
 }
 
+export async function ensureControlUiAssetsWithRetry(
+  runtime: RuntimeEnv = defaultRuntime,
+  opts?: { timeoutMs?: number },
+): Promise<ControlUiAssetsRepairResult> {
+  const rootHealth = await resolveControlUiDistIndexHealth({ argv1: process.argv[1] });
+  if (rootHealth.exists) {
+    return {
+      ok: true,
+      rebuilt: false,
+      root: resolveControlUiRootSync({ argv1: process.argv[1], cwd: process.cwd(), moduleUrl: import.meta.url }),
+    };
+  }
+  const buildResult = await ensureControlUiAssetsBuilt(runtime, opts);
+  const root = resolveControlUiRootSync({ argv1: process.argv[1], cwd: process.cwd(), moduleUrl: import.meta.url });
+  return {
+    ok: buildResult.ok && Boolean(root),
+    rebuilt: buildResult.built,
+    root,
+    message: buildResult.message,
+  };
+}
+
+export async function resolveControlUiRootWithRetry(
+  runtime: RuntimeEnv = defaultRuntime,
+  opts?: { timeoutMs?: number },
+): Promise<ControlUiRootState> {
+  const root = resolveControlUiRootSync({ argv1: process.argv[1], cwd: process.cwd(), moduleUrl: import.meta.url });
+  if (root) {
+    return isPackageProvenControlUiRootSync(root, {
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+      moduleUrl: import.meta.url,
+    })
+      ? { kind: "bundled", path: root }
+      : { kind: "resolved", path: root };
+  }
+
+  const repair = await ensureControlUiAssetsWithRetry(runtime, opts);
+  if (repair.root) {
+    return isPackageProvenControlUiRootSync(repair.root, {
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+      moduleUrl: import.meta.url,
+    })
+      ? { kind: "bundled", path: repair.root }
+      : { kind: "resolved", path: repair.root };
+  }
+  return { kind: "missing" };
+}
+
 export function handleControlUiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -372,23 +433,28 @@ export function handleControlUiHttpRequest(
   }
 
   const rootState = opts?.root;
-  if (rootState?.kind === "invalid") {
-    respondControlUiAssetsUnavailable(res, { configuredRootPath: rootState.path });
-    return true;
+  let root =
+    rootState?.kind === "resolved" || rootState?.kind === "bundled"
+      ? rootState.path
+      : rootState?.kind === "invalid"
+        ? null
+        : resolveControlUiRootSync({
+            moduleUrl: import.meta.url,
+            argv1: process.argv[1],
+            cwd: process.cwd(),
+          });
+  if (!root && opts?.resolveRoot) {
+    const resolved = await opts.resolveRoot();
+    root = resolved?.kind === "resolved" || resolved?.kind === "bundled" ? resolved.path : null;
+    if (resolved?.kind === "invalid") {
+      respondControlUiAssetsUnavailable(res, { configuredRootPath: resolved.path });
+      return true;
+    }
   }
-  if (rootState?.kind === "missing") {
+  if (!root) {
     respondControlUiAssetsUnavailable(res);
     return true;
   }
-
-  const root =
-    rootState?.kind === "resolved" || rootState?.kind === "bundled"
-      ? rootState.path
-      : resolveControlUiRootSync({
-          moduleUrl: import.meta.url,
-          argv1: process.argv[1],
-          cwd: process.cwd(),
-        });
   if (!root) {
     respondControlUiAssetsUnavailable(res);
     return true;

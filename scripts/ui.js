@@ -50,6 +50,10 @@ function resolveRunner() {
   if (pnpm) {
     return { cmd: pnpm, kind: "pnpm" };
   }
+  const corepack = which("corepack");
+  if (corepack) {
+    return { cmd: corepack, kind: "corepack" };
+  }
   return null;
 }
 
@@ -179,18 +183,24 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   if (action === "install") {
+    if (runner.kind === "corepack") {
+      run(runner.cmd, ["pnpm", "install", ...rest]);
+      return;
+    }
     run(runner.cmd, ["install", ...rest]);
     return;
   }
 
+  const installCmd = runner.kind === "corepack" ? ["pnpm", "install"] : ["install"];
+  const runCmd = runner.kind === "corepack" ? ["pnpm", "run", script, ...rest] : ["run", script, ...rest];
   if (!depsInstalled(action === "test" ? "test" : "build")) {
     const installEnv =
       action === "build" ? { ...process.env, NODE_ENV: "production" } : process.env;
-    const installArgs = action === "build" ? ["install", "--prod"] : ["install"];
+    const installArgs = action === "build" ? [...installCmd, "--prod"] : installCmd;
     runSync(runner.cmd, installArgs, installEnv);
   }
 
-  run(runner.cmd, ["run", script, ...rest]);
+  run(runner.cmd, runCmd);
 }
 
 const isDirectExecution = (() => {

@@ -22,6 +22,9 @@ Environment overrides:
   SHARED_CONSOLE_DEPLOY_BUILD_CMD
   SHARED_CONSOLE_DEPLOY_UI_BUILD_CMD
   SHARED_CONSOLE_DEPLOY_WEB_BUILD_CMD
+
+Notes:
+  UI assets must be prebuilt before runtime. This script verifies dist/control-ui/index.html after UI build.
 EOF
 }
 
@@ -128,6 +131,10 @@ fi
 
 if [ "$SKIP_UI_BUILD" -ne 1 ]; then
   shared_deploy_run_in_repo "$REPO_ROOT" "$UI_BUILD_CMD"
+  if [ ! -f "$REPO_ROOT/dist/control-ui/index.html" ]; then
+    shared_deploy_fail "Control UI build completed but dist/control-ui/index.html is still missing"
+  fi
+  shared_deploy_log "verified Control UI asset: dist/control-ui/index.html"
 fi
 
 if [ "$SKIP_WEB_BUILD" -ne 1 ]; then

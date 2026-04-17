@@ -24,7 +24,6 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
-  ensureControlUiAssetsBuilt,
   isPackageProvenControlUiRootSync,
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
@@ -631,22 +630,11 @@ export async function startGatewayServer(
       log.warn(`gateway: controlUi.root not found at ${resolvedOverridePath}`);
     }
   } else if (controlUiEnabled) {
-    let resolvedRoot = resolveControlUiRootSync({
+    const resolvedRoot = resolveControlUiRootSync({
       moduleUrl: import.meta.url,
       argv1: process.argv[1],
       cwd: process.cwd(),
     });
-    if (!resolvedRoot) {
-      const ensureResult = await ensureControlUiAssetsBuilt(gatewayRuntime);
-      if (!ensureResult.ok && ensureResult.message) {
-        log.warn(`gateway: ${ensureResult.message}`);
-      }
-      resolvedRoot = resolveControlUiRootSync({
-        moduleUrl: import.meta.url,
-        argv1: process.argv[1],
-        cwd: process.cwd(),
-      });
-    }
     controlUiRootState = resolvedRoot
       ? {
           kind: isPackageProvenControlUiRootSync(resolvedRoot, {

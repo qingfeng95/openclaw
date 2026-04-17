@@ -293,59 +293,22 @@ export async function ensureControlUiAssetsBuilt(
   runtime: RuntimeEnv = defaultRuntime,
   opts?: { timeoutMs?: number },
 ): Promise<EnsureControlUiAssetsResult> {
+  void runtime;
+  void opts;
   const health = await resolveControlUiDistIndexHealth({ argv1: process.argv[1] });
-  const indexFromDist = health.indexPath;
   if (health.exists) {
     return { ok: true, built: false };
   }
 
+  const indexFromDist = health.indexPath;
   const repoRoot = resolveControlUiRepoRoot(process.argv[1]);
-  if (!repoRoot) {
-    const hint = indexFromDist
-      ? `Missing Control UI assets at ${indexFromDist}`
-      : "Missing Control UI assets";
-    return {
-      ok: false,
-      built: false,
-      message: `${hint}. Build them with \`pnpm ui:build\` (auto-installs UI deps).`,
-    };
-  }
-
-  const indexPath = resolveControlUiDistIndexPathForRoot(repoRoot);
-  if (fs.existsSync(indexPath)) {
-    return { ok: true, built: false };
-  }
-
-  const uiScript = path.join(repoRoot, "scripts", "ui.js");
-  if (!fs.existsSync(uiScript)) {
-    return {
-      ok: false,
-      built: false,
-      message: `Control UI assets missing but ${uiScript} is unavailable.`,
-    };
-  }
-
-  runtime.log("Control UI assets missing; building (ui:build, auto-installs UI deps)…");
-
-  const build = await runCommandWithTimeout([process.execPath, uiScript, "build"], {
-    cwd: repoRoot,
-    timeoutMs: opts?.timeoutMs ?? 10 * 60_000,
-  });
-  if (build.code !== 0) {
-    return {
-      ok: false,
-      built: false,
-      message: `Control UI build failed: ${summarizeCommandOutput(build.stderr) ?? `exit ${build.code}`}`,
-    };
-  }
-
-  if (!fs.existsSync(indexPath)) {
-    return {
-      ok: false,
-      built: true,
-      message: `Control UI build completed but ${indexPath} is still missing.`,
-    };
-  }
-
-  return { ok: true, built: true };
+  const indexPath = repoRoot ? resolveControlUiDistIndexPathForRoot(repoRoot) : indexFromDist;
+  const hint = indexPath
+    ? `Missing Control UI assets at ${indexPath}`
+    : "Missing Control UI assets";
+  return {
+    ok: false,
+    built: false,
+    message: `${hint}. Build them ahead of time with \`pnpm ui:build\` (for Docker/release use \`pnpm build:docker\` or \`pnpm prepack\`).`,
+  };
 }

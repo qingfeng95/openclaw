@@ -455,10 +455,6 @@ export async function handleControlUiHttpRequest(
     respondControlUiAssetsUnavailable(res);
     return true;
   }
-  if (!root) {
-    respondControlUiAssetsUnavailable(res);
-    return true;
-  }
 
   const rootReal = (() => {
     try {

@@ -1,4 +1,4 @@
-import type { DbClient } from "../client.js";
+import type { DbClient } from "../client.ts";
 
 export type InstanceTenantRow = {
   instanceId: string;

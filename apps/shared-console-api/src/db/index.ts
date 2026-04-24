@@ -1,4 +1,4 @@
-export { createDbClient } from "./client.js";
-export { createTenantsRepository } from "./repositories/tenants-repository.js";
-export { createInstanceTenantsRepository } from "./repositories/instance-tenants-repository.js";
-export { createAuditEventsRepository } from "./repositories/audit-events-repository.js";
+export { createDbClient } from "./client.ts";
+export { createTenantsRepository } from "./repositories/tenants-repository.ts";
+export { createInstanceTenantsRepository } from "./repositories/instance-tenants-repository.ts";
+export { createAuditEventsRepository } from "./repositories/audit-events-repository.ts";

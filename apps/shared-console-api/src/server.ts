@@ -52,7 +52,7 @@ import {
   createDbClient,
   createInstanceTenantsRepository,
   createTenantsRepository,
-} from "./db/index.js";
+} from "./db/index.ts";
 
 const DEFAULT_SHARED_CONSOLE_API_HOST = "127.0.0.1";
 const DEFAULT_SHARED_CONSOLE_API_PORT = 43100;

@@ -16,7 +16,8 @@ export type DbClientOptions = {
 function wrapSqlClient(sql: any): DbClient {
   return {
     async query<T = Record<string, unknown>>(queryText: string, params: unknown[] = []) {
-      const rows = (await sql.unsafe(queryText, params)) as T[];
+      const result = await sql.unsafe(queryText, params);
+      const rows = Array.isArray(result) ? (result as T[]) : [];
       return { rows };
     },
     async transaction<T>(run: (tx: DbClient) => Promise<T>): Promise<T> {

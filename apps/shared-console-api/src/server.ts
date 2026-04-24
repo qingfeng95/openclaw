@@ -1406,11 +1406,11 @@ async function handleTenantRequest(
 ): Promise<void> {
   const method = (req.method ?? "GET").toUpperCase();
   if (method === "GET") {
-    const tenants = repositories.tenantsRepository ? await repositories.tenantsRepository.listTenants() : [];
-    const instanceTenants = repositories.instanceTenantsRepository
+    const tenants = (repositories.tenantsRepository ? await repositories.tenantsRepository.listTenants() : []) ?? [];
+    const instanceTenants = (repositories.instanceTenantsRepository
       ? await repositories.instanceTenantsRepository.listInstanceTenants()
-      : [];
-    if (tenants.length > 0 || instanceTenants.length > 0) {
+      : []) ?? [];
+    if ((tenants?.length ?? 0) > 0 || (instanceTenants?.length ?? 0) > 0) {
       const instances = Object.fromEntries(instanceTenants.map((item) => [item.instanceId, item.tenantId]));
       const defaultTenantId = tenants.find((item) => item.id === DEFAULT_SHARED_CONSOLE_TENANT_ID)?.id ?? DEFAULT_SHARED_CONSOLE_TENANT_ID;
       sendJson(req, res, 200, {

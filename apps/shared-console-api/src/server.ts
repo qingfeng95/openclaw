@@ -1413,6 +1413,10 @@ async function handleTenantRequest(
     const tenants = Array.isArray(rawTenants) ? rawTenants : [];
     const instanceTenants = Array.isArray(rawInstanceTenants) ? rawInstanceTenants : [];
 
+    process.stdout.write(
+      `[shared-console-api][tenants] rawTenants=${typeof rawTenants} isArray=${Array.isArray(rawTenants)} rawInstanceTenants=${typeof rawInstanceTenants} isArray=${Array.isArray(rawInstanceTenants)} tenantsLength=${tenants.length} instanceTenantsLength=${instanceTenants.length}\n`,
+    );
+
     if (tenants.length > 0 || instanceTenants.length > 0) {
       const instances = Object.fromEntries(instanceTenants.map((item) => [item.instanceId, item.tenantId]));
       const defaultTenantId = tenants.find((item) => item.id === DEFAULT_SHARED_CONSOLE_TENANT_ID)?.id ?? DEFAULT_SHARED_CONSOLE_TENANT_ID;
@@ -1431,6 +1435,9 @@ async function handleTenantRequest(
     const instances = mapping && typeof mapping.instances === "object" && !Array.isArray(mapping.instances)
       ? mapping.instances
       : {};
+    process.stdout.write(
+      `[shared-console-api][tenants] fallback mapping defaultTenantId=${mapping.defaultTenantId} instancesType=${typeof mapping.instances} instancesIsArray=${Array.isArray(mapping.instances)}\n`,
+    );
     sendJson(req, res, 200, {
       ok: true,
       source: "file",

@@ -1404,26 +1404,45 @@ async function handleTenantRequest(
     instanceTenantsRepository: ReturnType<typeof createInstanceTenantsRepository> | null;
   },
 ): Promise<void> {
-  const method = (req.method ?? "GET").toUpperCase();
-  if (method === "GET") {
-    const rawTenants = repositories.tenantsRepository ? await repositories.tenantsRepository.listTenants() : [];
-    const rawInstanceTenants = repositories.instanceTenantsRepository
-      ? await repositories.instanceTenantsRepository.listInstanceTenants()
-      : [];
-    const tenants = Array.isArray(rawTenants) ? rawTenants : [];
-    const instanceTenants = Array.isArray(rawInstanceTenants) ? rawInstanceTenants : [];
+  try {
+    const method = (req.method ?? "GET").toUpperCase();
+    if (method === "GET") {
+      const rawTenants = repositories.tenantsRepository ? await repositories.tenantsRepository.listTenants() : [];
+      const rawInstanceTenants = repositories.instanceTenantsRepository
+        ? await repositories.instanceTenantsRepository.listInstanceTenants()
+        : [];
+      const tenants = Array.isArray(rawTenants) ? rawTenants : [];
+      const instanceTenants = Array.isArray(rawInstanceTenants) ? rawInstanceTenants : [];
 
-    process.stdout.write(
-      `[shared-console-api][tenants] rawTenants=${typeof rawTenants} isArray=${Array.isArray(rawTenants)} rawInstanceTenants=${typeof rawInstanceTenants} isArray=${Array.isArray(rawInstanceTenants)} tenantsLength=${tenants.length} instanceTenantsLength=${instanceTenants.length}\n`,
-    );
+      process.stdout.write(
+        `[shared-console-api][tenants] rawTenants=${typeof rawTenants} isArray=${Array.isArray(rawTenants)} rawInstanceTenants=${typeof rawInstanceTenants} isArray=${Array.isArray(rawInstanceTenants)} tenantsLength=${tenants.length} instanceTenantsLength=${instanceTenants.length}\n`,
+      );
 
-    if (tenants.length > 0 || instanceTenants.length > 0) {
-      const instances = Object.fromEntries(instanceTenants.map((item) => [item.instanceId, item.tenantId]));
-      const defaultTenantId = tenants.find((item) => item.id === DEFAULT_SHARED_CONSOLE_TENANT_ID)?.id ?? DEFAULT_SHARED_CONSOLE_TENANT_ID;
+      if (tenants.length > 0 || instanceTenants.length > 0) {
+        const instances = Object.fromEntries(instanceTenants.map((item) => [item.instanceId, item.tenantId]));
+        const defaultTenantId = tenants.find((item) => item.id === DEFAULT_SHARED_CONSOLE_TENANT_ID)?.id ?? DEFAULT_SHARED_CONSOLE_TENANT_ID;
+        sendJson(req, res, 200, {
+          ok: true,
+          source: "database",
+          defaultTenantId,
+          instances,
+          tenants,
+          instanceTenants,
+        }, config.corsAllowedOrigins);
+        return;
+      }
+
+      const mapping = await readSharedConsoleTenantMapping(config.tenantMappingPath);
+      const instances = mapping && typeof mapping.instances === "object" && !Array.isArray(mapping.instances)
+        ? mapping.instances
+        : {};
+      process.stdout.write(
+        `[shared-console-api][tenants] fallback mapping defaultTenantId=${mapping.defaultTenantId} instancesType=${typeof mapping.instances} instancesIsArray=${Array.isArray(mapping.instances)}\n`,
+      );
       sendJson(req, res, 200, {
         ok: true,
-        source: "database",
-        defaultTenantId,
+        source: "file",
+        defaultTenantId: mapping.defaultTenantId,
         instances,
         tenants,
         instanceTenants,
@@ -1431,55 +1450,41 @@ async function handleTenantRequest(
       return;
     }
 
-    const mapping = await readSharedConsoleTenantMapping(config.tenantMappingPath);
-    const instances = mapping && typeof mapping.instances === "object" && !Array.isArray(mapping.instances)
-      ? mapping.instances
-      : {};
-    process.stdout.write(
-      `[shared-console-api][tenants] fallback mapping defaultTenantId=${mapping.defaultTenantId} instancesType=${typeof mapping.instances} instancesIsArray=${Array.isArray(mapping.instances)}\n`,
-    );
-    sendJson(req, res, 200, {
-      ok: true,
-      source: "file",
-      defaultTenantId: mapping.defaultTenantId,
-      instances,
-      tenants,
-      instanceTenants,
-    }, config.corsAllowedOrigins);
-    return;
-  }
+    if (method !== "PUT") {
+      throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
+    }
 
-  if (method !== "PUT") {
-    throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
-  }
-
-  requireAdminRequest(config, req);
-  const body = await readJsonBody(req);
-  const nextMapping = normalizeTenantMapping(body);
-  if (repositories.tenantsRepository && repositories.instanceTenantsRepository) {
-    await repositories.tenantsRepository.upsertTenant({
-      id: nextMapping.defaultTenantId,
-      name: nextMapping.defaultTenantId,
-      description: null,
-      status: "active",
-    });
-    for (const [instanceId, tenantId] of Object.entries(nextMapping.instances)) {
+    requireAdminRequest(config, req);
+    const body = await readJsonBody(req);
+    const nextMapping = normalizeTenantMapping(body);
+    if (repositories.tenantsRepository && repositories.instanceTenantsRepository) {
       await repositories.tenantsRepository.upsertTenant({
-        id: tenantId,
-        name: tenantId,
+        id: nextMapping.defaultTenantId,
+        name: nextMapping.defaultTenantId,
         description: null,
         status: "active",
       });
-      await repositories.instanceTenantsRepository.setInstanceTenant(instanceId, tenantId, "api");
+      for (const [instanceId, tenantId] of Object.entries(nextMapping.instances)) {
+        await repositories.tenantsRepository.upsertTenant({
+          id: tenantId,
+          name: tenantId,
+          description: null,
+          status: "active",
+        });
+        await repositories.instanceTenantsRepository.setInstanceTenant(instanceId, tenantId, "api");
+      }
     }
+    await fs.writeFile(config.tenantMappingPath, `${JSON.stringify(nextMapping, null, 2)}\n`, "utf8");
+    sendJson(req, res, 200, {
+      ok: true,
+      source: "database",
+      defaultTenantId: nextMapping.defaultTenantId,
+      instances: nextMapping.instances,
+    }, config.corsAllowedOrigins);
+  } catch (error) {
+    process.stdout.write(`[shared-console-api][tenants][error] ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    throw error;
   }
-  await fs.writeFile(config.tenantMappingPath, `${JSON.stringify(nextMapping, null, 2)}\n`, "utf8");
-  sendJson(req, res, 200, {
-    ok: true,
-    source: "database",
-    defaultTenantId: nextMapping.defaultTenantId,
-    instances: nextMapping.instances,
-  }, config.corsAllowedOrigins);
 }
 
 async function handleModelChannelsGenerateRequest(

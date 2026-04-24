@@ -2050,6 +2050,9 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
         }
 
         if (url.pathname === "/api/tenants") {
+          process.stdout.write(
+            `[shared-console-api][route] /api/tenants method=${req.method ?? "GET"} url=${url.href} tenantsRepo=${Boolean(tenantsRepository)} instanceTenantsRepo=${Boolean(instanceTenantsRepository)}\n`,
+          );
           await handleTenantRequest(req, res, config, deps, {
             tenantsRepository,
             instanceTenantsRepository,

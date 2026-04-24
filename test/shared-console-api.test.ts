@@ -96,6 +96,7 @@ async function startTestServer(params: {
     }>
   >;
   adminToken?: string;
+  corsAllowedOrigins?: string[];
 }) {
   const server = createSharedConsoleApiServer({
     config: {
@@ -106,6 +107,7 @@ async function startTestServer(params: {
       dedicatedInstancesRoot: path.join(params.root, ".dedicated"),
       ...(params.modelChannelsPath ? { modelChannelsPath: params.modelChannelsPath } : {}),
       adminToken: params.adminToken ?? null,
+      corsAllowedOrigins: params.corsAllowedOrigins ?? [],
     },
     runOpsCommand: params.runOpsCommand,
     listDockerContainers: params.listDockerContainers,
@@ -318,6 +320,223 @@ describe("shared console api", () => {
         expect(adminPayload.admin).toBe(true);
         expect(adminPayload.catalog.channels).toHaveLength(1);
         expect(adminPayload.settings.channels[0].apiKey).toBe("sk-secret");
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("updates model channel settings and tracks the resulting catalog", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const modelChannelsPath = path.join(root, "model-channels.json");
+      await fs.writeFile(
+        modelChannelsPath,
+        JSON.stringify({ userCanConfigureModels: false, channels: [], channelGroups: [] }, null, 2),
+        "utf8",
+      );
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        modelChannelsPath,
+        adminToken: "console-admin-secret",
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/model-channels`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+            "X-Request-Id": "req-model-channels-001",
+          },
+          body: JSON.stringify({
+            settings: {
+              userCanConfigureModels: true,
+              channels: [
+                {
+                  id: "openai-main",
+                  name: "OpenAI Main",
+                  providerId: "openai-main",
+                  baseUrl: "https://api.openai.com/v1",
+                  apiKey: "sk-secret",
+                  api: "openai-responses",
+                  models: [
+                    {
+                      id: "gpt-5-mini",
+                      name: "GPT-5 mini",
+                      reasoning: true,
+                      input: ["text"],
+                      contextWindow: 128000,
+                      maxTokens: 16000,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    },
+                  ],
+                  defaultModel: "openai-main/gpt-5-mini",
+                },
+              ],
+              channelGroups: [],
+            },
+          }),
+        });
+        expect(response.status).toBe(200);
+        const payload = await response.json();
+        expect(payload.ok).toBe(true);
+        expect(payload.settings.userCanConfigureModels).toBe(true);
+        expect(payload.catalog.channels).toHaveLength(1);
+        expect(payload.meta.changeSummary.addedChannelIds).toEqual(["openai-main"]);
+        expect(payload.meta.changeSummary.affectedInstanceIds).toEqual([]);
+        expect(payload.meta.changeSummary.unassignedInstanceIds).toEqual([]);
+        expect(payload.meta.changeSummary.restartRequired).toEqual([]);
+        expect(payload.meta.changeSummary.changedUserCanConfigureModels).toBe(true);
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("unassigns removed model channels when explicitly allowed", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const modelChannelsPath = path.join(root, "model-channels.json");
+      await fs.writeFile(
+        modelChannelsPath,
+        JSON.stringify(
+          {
+            userCanConfigureModels: true,
+            channels: [
+              {
+                id: "openai-main",
+                name: "OpenAI Main",
+                providerId: "openai-main",
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "sk-secret",
+                api: "openai-responses",
+                models: [
+                  {
+                    id: "gpt-5-mini",
+                    name: "GPT-5 mini",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 128000,
+                    maxTokens: 16000,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+                defaultModel: "openai-main/gpt-5-mini",
+              },
+            ],
+            channelGroups: [],
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      await writeInstance(root, {
+        id: "model-bound",
+        name: "Model Bound",
+        port: 19161,
+        modelChannelId: "openai-main",
+      });
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        modelChannelsPath,
+        adminToken: "console-admin-secret",
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/model-channels`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+            "X-Request-Id": "req-model-channels-001",
+          },
+          body: JSON.stringify({
+            autoUnassignRemovedChannels: true,
+            settings: {
+              userCanConfigureModels: true,
+              channels: [],
+              channelGroups: [],
+            },
+          }),
+        });
+        expect(response.status).toBe(200);
+        const payload = await response.json();
+        expect(payload.meta.unassignedInstances).toEqual([
+          expect.objectContaining({
+            id: "model-bound",
+            removedModelChannelId: "openai-main",
+          }),
+        ]);
+        expect(payload.meta.restartRequired).toContain("model-bound");
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("exposes lightweight request metrics after basic requests", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const { server, baseUrl } = await startTestServer({
+        root,
+        adminToken: "console-admin-secret",
+      });
+
+      try {
+        const healthResponse = await fetch(`${baseUrl}/healthz`);
+        expect(healthResponse.status).toBe(200);
+        const metricsResponse = await fetch(`${baseUrl}/metrics`);
+        expect(metricsResponse.status).toBe(200);
+        const metrics = await metricsResponse.json();
+        expect(metrics.ok).toBe(true);
+        expect(metrics.totalCount).toBeGreaterThanOrEqual(2);
+        expect(metrics.byStatusCode[200]).toBeGreaterThanOrEqual(2);
+        expect(metrics.byRoute["GET /healthz"]).toBeDefined();
+        expect(metrics.byRoute["GET /metrics"]).toBeDefined();
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("rate limits repeated model channel writes", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const modelChannelsPath = path.join(root, "model-channels.json");
+      await fs.writeFile(
+        modelChannelsPath,
+        JSON.stringify({ userCanConfigureModels: true, channels: [] }, null, 2),
+        "utf8",
+      );
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        modelChannelsPath,
+        adminToken: "console-admin-secret",
+      });
+
+      try {
+        for (let index = 0; index < 30; index += 1) {
+          const response = await fetch(`${baseUrl}/api/model-channels`, {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Shared-Console-Admin-Token": "console-admin-secret",
+            },
+            body: JSON.stringify({ settings: { userCanConfigureModels: true, channels: [] } }),
+          });
+          expect(response.status).toBe(200);
+        }
+
+        const limited = await fetch(`${baseUrl}/api/model-channels`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+          body: JSON.stringify({ settings: { userCanConfigureModels: true, channels: [] } }),
+        });
+        expect(limited.status).toBe(429);
       } finally {
         await stopServer(server);
       }
@@ -719,6 +938,47 @@ describe("shared console api", () => {
             "openai-main/gpt-5-mini": {},
           },
         });
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("rate limits repeated create instance requests", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const { server, baseUrl } = await startTestServer({
+        root,
+        runOpsCommand: async (invocation) => {
+          if (invocation.scriptName === "create-instance.sh") {
+            await writeInstance(root, {
+              id: invocation.args[0] ?? "rate-limit-instance",
+              name: invocation.args[0] ?? "rate-limit-instance",
+            });
+          }
+          return { exitCode: 0, stdout: "ok", stderr: "" };
+        },
+      });
+
+      try {
+        for (let index = 0; index < 30; index += 1) {
+          const response = await fetch(`${baseUrl}/api/instances`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ id: `rate-limit-${index}` }),
+          });
+          expect(response.status).toBe(201);
+        }
+
+        const limited = await fetch(`${baseUrl}/api/instances`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ id: "rate-limit-overflow" }),
+        });
+        expect(limited.status).toBe(429);
       } finally {
         await stopServer(server);
       }
@@ -1526,6 +1786,61 @@ describe("shared console api", () => {
     });
   });
 
+  it("records audit logs for instance create and patch operations", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const logs: string[] = [];
+      const originalWrite = process.stdout.write.bind(process.stdout);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (process.stdout as any).write = (chunk: string | Uint8Array, encoding?: BufferEncoding, cb?: (error?: Error | null) => void) => {
+        const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+        if (text.includes("[audit]")) {
+          logs.push(text);
+        }
+        return originalWrite(chunk as never, encoding as never, cb as never);
+      };
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        runOpsCommand: async (invocation) => {
+          if (invocation.scriptName === "create-instance.sh") {
+            await writeInstance(root, {
+              id: "audit-create",
+              name: "Audit Create",
+              port: 19141,
+            });
+          }
+          return {
+            exitCode: 0,
+            stdout: "ok",
+            stderr: "",
+          };
+        },
+      });
+
+      try {
+        const createResponse = await fetch(`${baseUrl}/api/instances`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: "audit-create", name: "Audit Create", port: 19141 }),
+        });
+        expect(createResponse.status).toBe(201);
+
+        const patchResponse = await fetch(`${baseUrl}/api/instances/audit-create`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: "Audit Create Renamed" }),
+        });
+        expect(patchResponse.status).toBe(200);
+
+        expect(logs.some((line) => line.includes("instance.create"))).toBe(true);
+        expect(logs.some((line) => line.includes("instance.patch"))).toBe(true);
+      } finally {
+        await stopServer(server);
+        (process.stdout as any).write = originalWrite;
+      }
+    });
+  });
+
   it("patches instance name and exposes lifecycle actions", async () => {
     await withTempInstancesRoot(async (root) => {
       await writeInstance(root, {
@@ -1578,6 +1893,60 @@ describe("shared console api", () => {
 
         const persistedEnv = await fs.readFile(path.join(root, "gamma", "instance.env"), "utf8");
         expect(persistedEnv).toContain('INSTANCE_NAME="Gamma Renamed"');
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("serializes concurrent patch and start requests for the same instance", async () => {
+    await withTempInstancesRoot(async (root) => {
+      await writeInstance(root, {
+        id: "gamma-lock",
+        name: "Gamma Lock",
+        port: 19133,
+      });
+
+      let releaseStart: (() => void) | null = null;
+      const startEntered = new Promise<void>((resolve) => {
+        releaseStart = resolve;
+      });
+      const startCanFinish = new Promise<void>((resolve) => {
+        startEntered.then(() => setTimeout(resolve, 10));
+      });
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        runOpsCommand: async (invocation) => {
+          if (invocation.scriptName === "start-instance.sh") {
+            releaseStart?.();
+            await startCanFinish;
+          }
+          return {
+            exitCode: 0,
+            stdout: `ran ${invocation.scriptName}`,
+            stderr: "",
+          };
+        },
+      });
+
+      try {
+        const startRequest = fetch(`${baseUrl}/api/instances/gamma-lock/start`, { method: "POST" });
+        await startEntered;
+        const patchResponse = await fetch(`${baseUrl}/api/instances/gamma-lock`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: "Gamma Lock Renamed" }),
+        });
+        expect(patchResponse.status).toBe(200);
+        expect((await patchResponse.json()).item.name).toBe("Gamma Lock Renamed");
+
+        const startResponse = await startRequest;
+        expect(startResponse.status).toBe(200);
+        expect((await startResponse.json()).action).toBe("start");
+
+        const persistedEnv = await fs.readFile(path.join(root, "gamma-lock", "instance.env"), "utf8");
+        expect(persistedEnv).toContain('INSTANCE_NAME="Gamma Lock Renamed"');
       } finally {
         await stopServer(server);
       }
@@ -1897,7 +2266,185 @@ describe("shared console api", () => {
     });
   });
 
+  it("allows only configured origins through CORS", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const { server, baseUrl } = await startTestServer({
+        root,
+        corsAllowedOrigins: ["https://console.example.com"],
+      });
+
+      try {
+        const allowed = await fetch(`${baseUrl}/healthz`, {
+          headers: {
+            Origin: "https://console.example.com",
+          },
+        });
+        expect(allowed.status).toBe(200);
+        expect(allowed.headers.get("access-control-allow-origin")).toBe("https://console.example.com");
+
+        const blocked = await fetch(`${baseUrl}/healthz`, {
+          headers: {
+            Origin: "https://evil.example.com",
+          },
+        });
+        expect(blocked.status).toBe(200);
+        expect(blocked.headers.get("access-control-allow-origin")).toBeNull();
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("loads and saves tenant mappings", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const tenantMappingPath = path.join(root, "tenants.json");
+      await fs.writeFile(
+        tenantMappingPath,
+        JSON.stringify(
+          {
+            defaultTenantId: "internal",
+            instances: {
+              "crewclaw-1": "internal",
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        adminToken: "console-admin-secret",
+      });
+
+      try {
+        const loaded = await fetch(`${baseUrl}/api/tenants`);
+        expect(loaded.status).toBe(200);
+        expect(await loaded.json()).toMatchObject({
+          ok: true,
+          defaultTenantId: "internal",
+          instances: {
+            "crewclaw-1": "internal",
+          },
+        });
+
+        const saved = await fetch(`${baseUrl}/api/tenants`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+          body: JSON.stringify({
+            defaultTenantId: "customer-a",
+            instances: {
+              "crewclaw-1": "customer-a",
+            },
+          }),
+        });
+        expect(saved.status).toBe(200);
+        expect(await saved.json()).toMatchObject({
+          ok: true,
+          defaultTenantId: "customer-a",
+          instances: {
+            "crewclaw-1": "customer-a",
+          },
+        });
+
+        const reloaded = await fetch(`${baseUrl}/api/tenants`);
+        expect(reloaded.status).toBe(200);
+        expect(await reloaded.json()).toMatchObject({
+          ok: true,
+          defaultTenantId: "customer-a",
+          instances: {
+            "crewclaw-1": "customer-a",
+          },
+        });
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
   it("validates admin mode and returns an instance token only for authorized requests", async () => {
+    await withTempInstancesRoot(async (root) => {
+      await writeInstance(root, {
+        id: "admin-token",
+        runtimeKind: "container",
+        containerName: "crewclaw-admin-token",
+        proxyToken: "instance-token-123",
+      });
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        adminToken: "console-admin-secret",
+      });
+
+      try {
+        const forbidden = await fetch(`${baseUrl}/api/admin/validate`);
+        expect(forbidden.status).toBe(403);
+
+        const validated = await fetch(`${baseUrl}/api/admin/validate`, {
+          headers: {
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+        });
+        expect(validated.status).toBe(200);
+        expect(await validated.json()).toEqual({
+          ok: true,
+          admin: true,
+        });
+
+        const tokenResponse = await fetch(`${baseUrl}/api/instances/admin-token/token`, {
+          headers: {
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+        });
+        expect(tokenResponse.status).toBe(200);
+        expect(await tokenResponse.json()).toEqual({
+          ok: true,
+          item: {
+            id: "admin-token",
+            pool: "shared",
+            token: "instance-token-123",
+          },
+        });
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("rate limits repeated admin validation attempts", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const { server, baseUrl } = await startTestServer({
+        root,
+        adminToken: "console-admin-secret",
+      });
+
+      try {
+        for (let index = 0; index < 30; index += 1) {
+          const response = await fetch(`${baseUrl}/api/admin/validate`, {
+            headers: {
+              "X-Shared-Console-Admin-Token": "console-admin-secret",
+            },
+          });
+          expect(response.status).toBe(200);
+        }
+
+        const limited = await fetch(`${baseUrl}/api/admin/validate`, {
+          headers: {
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+        });
+        expect(limited.status).toBe(429);
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("logs and authorizes instance pairing requests for admins", async () => {
     await withTempInstancesRoot(async (root) => {
       await writeInstance(root, {
         id: "admin-token",
@@ -2087,6 +2634,93 @@ describe("shared console api", () => {
     });
   });
 
+  it("rate limits repeated pairing requests", async () => {
+    await withTempInstancesRoot(async (root) => {
+      await writeInstance(root, { id: "pairing-beta" });
+      const { server, baseUrl } = await startTestServer({
+        root,
+        adminToken: "console-admin-secret",
+        runOpsCommand: async () => ({ exitCode: 0, stdout: JSON.stringify({ pending: [], paired: [] }), stderr: "" }),
+      });
+
+      try {
+        for (let index = 0; index < 30; index += 1) {
+          const response = await fetch(`${baseUrl}/api/instances/pairing-beta/pairing`, {
+            headers: {
+              "X-Shared-Console-Admin-Token": "console-admin-secret",
+            },
+          });
+          expect(response.status).toBe(200);
+        }
+
+        const limited = await fetch(`${baseUrl}/api/instances/pairing-beta/pairing`, {
+          headers: {
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+        });
+        expect(limited.status).toBe(429);
+      } finally {
+        await stopServer(server);
+      }
+    });
+  });
+
+  it("returns audit logs for admin and model channel operations", async () => {
+    await withTempInstancesRoot(async (root) => {
+      const modelChannelsPath = path.join(root, "model-channels.json");
+      await fs.writeFile(modelChannelsPath, JSON.stringify({ userCanConfigureModels: true, channels: [] }, null, 2), "utf8");
+      await writeInstance(root, {
+        id: "audit-alpha",
+        runtimeKind: "container",
+        containerName: "crewclaw-audit-alpha",
+        proxyToken: "audit-token",
+      });
+
+      const logs: string[] = [];
+      const originalWrite = process.stdout.write.bind(process.stdout);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (process.stdout as any).write = (chunk: string | Uint8Array, encoding?: BufferEncoding, cb?: (error?: Error | null) => void) => {
+        const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+        if (text.includes("[audit]")) {
+          logs.push(text);
+        }
+        return originalWrite(chunk as never, encoding as never, cb as never);
+      };
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        modelChannelsPath,
+        adminToken: "console-admin-secret",
+        runOpsCommand: async () => ({ exitCode: 0, stdout: JSON.stringify({ pending: [], paired: [] }), stderr: "" }),
+      });
+
+      try {
+        await fetch(`${baseUrl}/api/admin/validate`, {
+          headers: {
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+        });
+        await fetch(`${baseUrl}/api/instances/audit-alpha/token`, {
+          headers: {
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+        });
+        await fetch(`${baseUrl}/api/model-channels`, {
+          headers: {
+            "X-Shared-Console-Admin-Token": "console-admin-secret",
+          },
+        });
+
+        expect(logs.some((line) => line.includes("admin.validate"))).toBe(true);
+        expect(logs.some((line) => line.includes("instance.token.read"))).toBe(true);
+        expect(logs.some((line) => line.includes("model-channels.read"))).toBe(true);
+      } finally {
+        await stopServer(server);
+        (process.stdout as any).write = originalWrite;
+      }
+    });
+  });
+
   it("lists relevant containers and attached instances", async () => {
     await withTempInstancesRoot(async (root) => {
       await writeInstance(root, {
@@ -2240,6 +2874,62 @@ describe("shared console api", () => {
         expect(invocations).toEqual([["start", "crewclaw-epsilon"]]);
       } finally {
         await stopServer(server);
+      }
+    });
+  });
+
+  it("records audit logs for container lifecycle actions", async () => {
+    await withTempInstancesRoot(async (root) => {
+      await writeInstance(root, {
+        id: "epsilon-audit",
+        name: "Epsilon Audit",
+        port: 19151,
+        runtimeKind: "container",
+        containerName: "crewclaw-epsilon-audit",
+        containerId: "cid-epsilon-audit",
+      });
+
+      const logs: string[] = [];
+      const originalWrite = process.stdout.write.bind(process.stdout);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (process.stdout as any).write = (chunk: string | Uint8Array, encoding?: BufferEncoding, cb?: (error?: Error | null) => void) => {
+        const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+        if (text.includes("[audit]")) {
+          logs.push(text);
+        }
+        return originalWrite(chunk as never, encoding as never, cb as never);
+      };
+
+      const { server, baseUrl } = await startTestServer({
+        root,
+        listDockerContainers: async () => [
+          {
+            id: "cid-epsilon-audit",
+            name: "crewclaw-epsilon-audit",
+            image: "crewclaw:test",
+            state: "exited",
+            status: "Exited (0) 1 minute ago",
+            createdAt: "2026-04-01 10:30:00 +0800 CST",
+            ports: [],
+            labels: {},
+          },
+        ],
+        runDockerCommand: async () => ({
+          exitCode: 0,
+          stdout: "started",
+          stderr: "",
+        }),
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/containers/crewclaw-epsilon-audit/start`, {
+          method: "POST",
+        });
+        expect(response.status).toBe(200);
+        expect(logs.some((line) => line.includes("container.start"))).toBe(true);
+      } finally {
+        await stopServer(server);
+        (process.stdout as any).write = originalWrite;
       }
     });
   });

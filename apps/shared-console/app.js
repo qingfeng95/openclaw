@@ -157,6 +157,9 @@ const state = {
   modelChannelSettingsText: "",
   modelChannelEditorDirty: false,
   modelChannelEditorSyncSourceKey: null,
+  tenantMapping: null,
+  tenantMappingLoading: false,
+  tenantMappingError: "",
   filter: "",
   activeTab: "overview",
   busy: false,
@@ -206,6 +209,7 @@ const elements = {
   copyLoginGuideButton: document.querySelector("#copy-login-guide-button"),
   copyTokenButton: document.querySelector("#copy-token-button"),
   modelChannelsPanel: document.querySelector("#model-channels-panel"),
+  tenantsPanel: document.querySelector("#tenants-panel"),
   modelChannelsForm: document.querySelector("#model-channels-form"),
   modelChannelDraftSummary: document.querySelector("#model-channel-draft-summary"),
   modelChannelDraftEmptyState: document.querySelector("#model-channel-draft-empty-state"),
@@ -346,7 +350,7 @@ function updateAdminModeUi() {
     elements.adminTokenInput.disabled = true;
     elements.enableAdminModeButton.disabled = true;
     elements.clearAdminModeButton.disabled = true;
-    elements.adminModeNote.textContent = "当前服务器未启用管理员模式。";
+    elements.adminModeNote.textContent = "当前服务器未启用管理员模式，相关管理按钮不会显示。";
     if (elements.copyTokenButton) {
       elements.copyTokenButton.classList.add("hidden");
     }
@@ -365,7 +369,7 @@ function updateAdminModeUi() {
   elements.enableAdminModeButton.disabled = false;
   elements.clearAdminModeButton.disabled = !isAdminModeEnabled();
   elements.adminModeNote.textContent = isAdminModeEnabled()
-    ? "管理员模式已启用，可复制当前实例 Token。"
+    ? "管理员模式已启用；选中实例后可复制 Token、查看 pairing 和登录指引。"
     : "当前未进入管理员模式。";
   if (elements.copyTokenButton) {
     elements.copyTokenButton.classList.toggle("hidden", !isAdminModeEnabled() || !state.selectedItem);
@@ -417,7 +421,7 @@ function instanceRuntimeDescription(item) {
 }
 
 function setActiveTab(nextTab, { persist = true } = {}) {
-  const tab = ["overview", "containers", "instances", "channels", "activity"].includes(nextTab)
+  const tab = ["overview", "containers", "instances", "channels", "tenants", "activity"].includes(nextTab)
     ? nextTab
     : "overview";
   state.activeTab = tab;
@@ -619,6 +623,116 @@ async function loadModelChannelConfig({ announce = false } = {}) {
     normalizeModelChannelSettingsForEditor,
     pushStatus,
   });
+}
+
+async function loadTenantMapping({ announce = false } = {}) {
+  state.tenantMappingLoading = true;
+  state.tenantMappingError = "";
+  try {
+    const payload = await fetchJson("/tenants", {
+      method: "GET",
+      adminAuth: isAdminModeEnabled(),
+    });
+    state.tenantMapping = payload;
+    if (announce) {
+      pushStatus("success", "租户映射已加载", "已同步实例归属和默认 tenant。", "tenants");
+    }
+    return payload;
+  } catch (error) {
+    state.tenantMappingError = error instanceof Error ? error.message : String(error);
+    if (announce) {
+      pushStatus("error", "加载租户映射失败", state.tenantMappingError, "tenants");
+    }
+    throw error;
+  } finally {
+    state.tenantMappingLoading = false;
+    renderAll();
+  }
+}
+
+async function saveTenantMapping(nextMapping, { announce = true } = {}) {
+  const payload = await fetchJson("/tenants", {
+    method: "PUT",
+    adminAuth: true,
+    body: JSON.stringify(nextMapping),
+  });
+  state.tenantMapping = payload;
+  if (announce) {
+    pushStatus("success", "租户映射已保存", "已更新默认 tenant 和实例归属。", "tenants");
+  }
+  renderAll();
+  return payload;
+}
+
+function renderTenantsPanel() {
+  if (!elements.tenantsPanel) {
+    return;
+  }
+  const mapping = state.tenantMapping;
+  if (!mapping) {
+    elements.tenantsPanel.innerHTML = state.tenantMappingLoading
+      ? '<div class="empty-state empty-state-compact">正在加载租户映射…</div>'
+      : '<div class="empty-state empty-state-compact">尚未加载租户映射。</div>';
+    return;
+  }
+
+  const entries = Object.entries(mapping.instances || {});
+  const tenants = Array.isArray(mapping.tenants) ? mapping.tenants : [];
+
+  elements.tenantsPanel.innerHTML = `
+    <div class="tenant-summary-grid">
+      <article class="summary-card summary-card-accent">
+        <div class="summary-card-top">
+          <span class="summary-label">默认 tenant</span>
+          <span class="summary-index">01</span>
+        </div>
+        <div class="summary-value">${escapeHtml(mapping.defaultTenantId || "internal")}</div>
+        <div class="summary-subtext">未映射实例会归到这里。</div>
+      </article>
+      <article class="summary-card">
+        <div class="summary-card-top">
+          <span class="summary-label">映射实例数</span>
+          <span class="summary-index">02</span>
+        </div>
+        <div class="summary-value">${escapeHtml(String(entries.length))}</div>
+        <div class="summary-subtext">当前 tenant 归属条目数。</div>
+      </article>
+      <article class="summary-card">
+        <div class="summary-card-top">
+          <span class="summary-label">tenant 数量</span>
+          <span class="summary-index">03</span>
+        </div>
+        <div class="summary-value">${escapeHtml(String(tenants.length))}</div>
+        <div class="summary-subtext">来自数据库或映射文件的 tenant 记录。</div>
+      </article>
+    </div>
+    <section class="tenant-mapping-editor">
+      <label class="field">
+        <span>默认 tenant ID</span>
+        <input id="tenant-default-id-input" type="text" value="${escapeHtml(mapping.defaultTenantId || "internal")}" />
+      </label>
+      <div class="inline-actions">
+        <button id="save-tenants-button" class="button button-primary" type="button">保存租户映射</button>
+      </div>
+    </section>
+    <section class="tenant-instance-table">
+      <div class="panel-header">
+        <div>
+          <p class="section-kicker">实例映射</p>
+          <h2>instance → tenant</h2>
+        </div>
+      </div>
+      <div class="tenant-instance-rows">
+        ${entries.length === 0 ? '<div class="empty-state empty-state-compact">当前还没有实例映射。</div>' : entries.map(([instanceId, tenantId]) => `
+          <div class="tenant-instance-row">
+            <span class="chip">${escapeHtml(instanceId)}</span>
+            <span>→</span>
+            <input class="tenant-instance-input" data-instance-id="${escapeHtml(instanceId)}" type="text" value="${escapeHtml(tenantId)}" />
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
 }
 
 function buildModelChannelSettingsDraft() {
@@ -1357,6 +1471,7 @@ function renderAll() {
   renderContainerLogs();
   renderInstancesList();
   renderDedicatedInstancesList();
+  renderTenantsPanel();
   renderDetail();
 }
 
@@ -2024,6 +2139,37 @@ function bindEvents() {
     void copySelectedInstanceToken().catch((error) => {
       pushStatus("error", "复制 Token 失败", error.message);
     });
+  });
+  const tenantsPanel = document.querySelector("#tenants-panel");
+  tenantsPanel?.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    const button = target.closest("#save-tenants-button");
+    if (button) {
+      const defaultInput = document.querySelector("#tenant-default-id-input");
+      const instanceInputs = Array.from(document.querySelectorAll(".tenant-instance-input"));
+      const nextMapping = {
+        defaultTenantId: String(defaultInput?.value || "internal").trim() || "internal",
+        instances: Object.fromEntries(instanceInputs
+          .map((input) => {
+            if (!(input instanceof HTMLInputElement)) {
+              return null;
+            }
+            const instanceId = input.getAttribute("data-instance-id")?.trim();
+            const tenantId = input.value.trim();
+            if (!instanceId || !tenantId) {
+              return null;
+            }
+            return [instanceId, tenantId];
+          })
+          .filter(Boolean)),
+      };
+      void saveTenantMapping(nextMapping).catch((error) => {
+        pushStatus("error", "保存租户映射失败", error.message, "tenants");
+      });
+    }
   });
   elements.startButton.addEventListener("click", () => {
     void runSelectedInstanceAction("start");

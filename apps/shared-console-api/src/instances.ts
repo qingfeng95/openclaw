@@ -625,32 +625,43 @@ export async function updateSharedInstanceEnvValues(
   root: string,
   id: string,
   updates: Record<string, string | null | undefined>,
-): Promise<void> {
+): Promise<{ changedKeys: string[] }> {
   if (!validateSharedInstanceId(id)) {
     throw new Error(`Invalid instance id: ${id}`);
   }
   const instanceEnvPath = path.join(root, id, "instance.env");
   const content = await fs.readFile(instanceEnvPath, "utf8");
   let nextContent = content;
+  const changedKeys: string[] = [];
   for (const [key, rawValue] of Object.entries(updates)) {
     const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const pattern = new RegExp(`^${escapedKey}=.*$`, "m");
     if (rawValue == null || rawValue === "") {
-      nextContent = pattern.test(nextContent)
-        ? nextContent.replace(new RegExp(`^${escapedKey}=.*(?:\\r?\\n)?`, "m"), "")
-        : nextContent;
+      if (pattern.test(nextContent)) {
+        nextContent = nextContent.replace(new RegExp(`^${escapedKey}=.*(?:\\r?\\n)?`, "m"), "");
+        changedKeys.push(key);
+      }
       continue;
     }
     const nextLine = `${key}="${escapeDoubleQuotedEnvValue(rawValue)}"`;
-    nextContent = pattern.test(nextContent)
-      ? nextContent.replace(pattern, nextLine)
-      : `${nextContent.trimEnd()}\n${nextLine}\n`;
+    if (pattern.test(nextContent)) {
+      nextContent = nextContent.replace(pattern, nextLine);
+      changedKeys.push(key);
+    } else {
+      nextContent = `${nextContent.trimEnd()}\n${nextLine}\n`;
+      changedKeys.push(key);
+    }
   }
   await fs.writeFile(instanceEnvPath, nextContent, "utf8");
+  return { changedKeys };
 }
 
-export async function updateSharedInstanceName(root: string, id: string, name: string): Promise<void> {
-  await updateSharedInstanceEnvValues(root, id, {
+export async function updateSharedInstanceName(
+  root: string,
+  id: string,
+  name: string,
+): Promise<{ changedKeys: string[] }> {
+  return await updateSharedInstanceEnvValues(root, id, {
     INSTANCE_NAME: name,
   });
 }

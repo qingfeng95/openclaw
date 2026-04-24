@@ -38,6 +38,7 @@ import {
 } from "./instances.ts";
 import {
   buildSharedConsoleModelChannelCatalog,
+  diffSharedConsoleModelChannelSettings,
   generateSharedConsoleModelChannelSettingsDraft,
   normalizeSharedConsoleModelChannelSettings,
   readSharedConsoleModelChannelSettings,
@@ -46,11 +47,71 @@ import {
   writeSharedConsoleInstanceModelConfig,
   writeSharedConsoleModelChannelSettings,
 } from "./model-channels.ts";
+import {
+  createAuditEventsRepository,
+  createDbClient,
+  createInstanceTenantsRepository,
+  createTenantsRepository,
+} from "./db/index.js";
 
 const DEFAULT_SHARED_CONSOLE_API_HOST = "127.0.0.1";
 const DEFAULT_SHARED_CONSOLE_API_PORT = 43100;
 const DEFAULT_SHARED_CONSOLE_API_PROBE_TIMEOUT_MS = 1_500;
 const DEFAULT_SHARED_CONSOLE_API_DIAGNOSTICS_CACHE_TTL_MS = 5_000;
+const DEFAULT_SHARED_CONSOLE_TENANT_MAPPING_PATH = ".shared-console-tenants.json";
+const DEFAULT_SHARED_CONSOLE_TENANT_ID = "internal";
+
+type SharedConsoleTenantMapping = {
+  defaultTenantId: string;
+  instances: Record<string, string>;
+};
+
+function normalizeTenantId(value: unknown, fallback = DEFAULT_SHARED_CONSOLE_TENANT_ID): string {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed || fallback;
+}
+
+function normalizeTenantMapping(value: unknown): SharedConsoleTenantMapping {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      defaultTenantId: DEFAULT_SHARED_CONSOLE_TENANT_ID,
+      instances: {},
+    };
+  }
+  const record = value as Record<string, unknown>;
+  const defaultTenantId = normalizeTenantId(record.defaultTenantId);
+  const instances: Record<string, string> = {};
+  const rawInstances = record.instances;
+  if (rawInstances && typeof rawInstances === "object" && !Array.isArray(rawInstances)) {
+    for (const [instanceId, tenantId] of Object.entries(rawInstances as Record<string, unknown>)) {
+      const normalizedInstanceId = String(instanceId || "").trim();
+      const normalizedTenantId = normalizeTenantId(tenantId, defaultTenantId);
+      if (normalizedInstanceId) {
+        instances[normalizedInstanceId] = normalizedTenantId;
+      }
+    }
+  }
+  return { defaultTenantId, instances };
+}
+
+async function readSharedConsoleTenantMapping(
+  tenantMappingPath: string,
+): Promise<SharedConsoleTenantMapping> {
+  try {
+    const raw = await fs.readFile(tenantMappingPath, "utf8");
+    return normalizeTenantMapping(JSON.parse(raw));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { defaultTenantId: DEFAULT_SHARED_CONSOLE_TENANT_ID, instances: {} };
+    }
+    throw error;
+  }
+}
+
+function resolveInstanceTenantId(instanceId: string, mapping: SharedConsoleTenantMapping): string {
+  return mapping.instances[instanceId]?.trim() || mapping.defaultTenantId || DEFAULT_SHARED_CONSOLE_TENANT_ID;
+}
+
 const SAFE_CONTAINER_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -73,10 +134,13 @@ export type SharedConsoleApiConfig = {
   sharedInstancesRoot: string;
   dedicatedInstancesRoot: string;
   modelChannelsPath: string;
+  tenantMappingPath: string;
+  databaseUrl: string;
   bashPath: string;
   probeTimeoutMs: number;
   diagnosticsCacheTtlMs: number;
   adminToken: string | null;
+  corsAllowedOrigins: string[];
 };
 
 export type OpsCommandInvocation = {
@@ -134,6 +198,14 @@ function parsePositiveInteger(value: string | undefined, fallback: number): numb
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseCorsAllowedOrigins(value: string | undefined): string[] {
+  const origins = value
+    ?.split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return origins && origins.length > 0 ? origins : [];
+}
+
 export function resolveSharedConsoleApiConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): SharedConsoleApiConfig {
@@ -147,6 +219,11 @@ export function resolveSharedConsoleApiConfig(
     sharedInstancesRoot,
     dedicatedInstancesRoot,
     modelChannelsPath: resolveSharedConsoleModelChannelsPath(env, sharedInstancesRoot),
+    tenantMappingPath: path.resolve(
+      env.SHARED_CONSOLE_TENANT_MAPPING_PATH?.trim() ||
+        path.join(repoRoot, DEFAULT_SHARED_CONSOLE_TENANT_MAPPING_PATH),
+    ),
+    databaseUrl: env.DATABASE_URL?.trim() || "",
     bashPath: resolveSharedConsoleApiBashPath(env),
     probeTimeoutMs: parsePositiveInteger(
       env.SHARED_CONSOLE_API_PROBE_TIMEOUT_MS,
@@ -157,35 +234,75 @@ export function resolveSharedConsoleApiConfig(
       DEFAULT_SHARED_CONSOLE_API_DIAGNOSTICS_CACHE_TTL_MS,
     ),
     adminToken: env.SHARED_CONSOLE_ADMIN_TOKEN?.trim() || null,
+    corsAllowedOrigins: (env.SHARED_CONSOLE_API_CORS_ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
   };
 }
 
-function setCorsHeaders(res: ServerResponse): void {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+function resolveAllowedCorsOrigin(
+  req: IncomingMessage,
+  allowedOrigins: string[],
+): string | null {
+  if (allowedOrigins.length === 0) {
+    return null;
+  }
+  const origin = req.headers.origin?.trim() ?? "";
+  if (!origin || !allowedOrigins.includes(origin)) {
+    return null;
+  }
+  return origin;
+}
+
+function setCorsHeaders(
+  req: IncomingMessage | null,
+  res: ServerResponse,
+  allowedOrigins: string[],
+): void {
+  const allowedOrigin = req ? resolveAllowedCorsOrigin(req, allowedOrigins) : null;
+  if (allowedOrigin) {
+    res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+    res.setHeader("Vary", "Origin");
+  }
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Shared-Console-Admin-Token");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS");
 }
 
-function sendJson(res: ServerResponse, statusCode: number, body: JsonValue): void {
-  setCorsHeaders(res);
+function sendJson(
+  req: IncomingMessage | null,
+  res: ServerResponse,
+  statusCode: number,
+  body: JsonValue,
+  allowedOrigins: string[] = [],
+): void {
+  setCorsHeaders(req, res, allowedOrigins);
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
 }
 
 function sendError(
+  req: IncomingMessage | null,
   res: ServerResponse,
   statusCode: number,
   message: string,
   errorType = "invalid_request",
+  allowedOrigins: string[] = [],
 ): void {
-  sendJson(res, statusCode, {
-    ok: false,
-    error: {
-      type: errorType,
-      message,
+  sendJson(
+    req,
+    res,
+    statusCode,
+    {
+      ok: false,
+      error: {
+        type: errorType,
+        message,
+      },
     },
-  });
+    allowedOrigins,
+  );
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -523,7 +640,7 @@ async function handleCollectionUsageSummaryRequest(
     resolveRecordOptions(config, deps, false),
   );
   const result = await readSharedInstancesUsageSummaryAggregate(items, resolveUsageSummaryOptions(config, deps));
-  sendJson(res, 200, {
+  sendJson(req, res, 200, {
     ok: true,
     item: {
       pool: route.pool,
@@ -694,19 +811,28 @@ async function handleInstanceDiagnosticsRequest(
     throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
   }
   const refreshRequested = readBooleanQuery(new URL(req.url || "", "http://localhost"), "refresh", false);
+  enforceRateLimit(`instance.diagnostics:${route.pool}`);
   const item = await ensureInstance(config, deps, route.pool, route.id, false);
   const probe = await readSharedInstanceDiagnostics(item, {
     ...resolveDiagnosticsOptions(config, deps),
     cacheTtlMs: refreshRequested ? 0 : config.diagnosticsCacheTtlMs,
   });
-  sendJson(res, 200, {
+  await logAuditEvent({
+    actor: readRequestActor(config, req),
+    action: "instance.diagnostics.read",
+    target: item.id,
+    pool: route.pool,
+    requestId: readRequestId(req),
+    result: "success",
+  });
+  sendJson(req, res, 200, {
     ok: true,
     item: {
       id: item.id,
       pool: route.pool,
       probe,
     },
-  });
+  }, config.corsAllowedOrigins);
 }
 
 async function handleInstanceUsageSummaryRequest(
@@ -719,9 +845,18 @@ async function handleInstanceUsageSummaryRequest(
   if ((req.method ?? "GET").toUpperCase() !== "GET") {
     throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
   }
+  enforceRateLimit(`instance.usage-summary:${route.pool}`);
   const item = await ensureInstance(config, deps, route.pool, route.id, false);
   const result = await readSharedInstanceUsageSummary(item, resolveUsageSummaryOptions(config, deps));
-  sendJson(res, 200, {
+  await logAuditEvent({
+    actor: readRequestActor(config, req),
+    action: "instance.usage-summary.read",
+    target: item.id,
+    pool: route.pool,
+    requestId: readRequestId(req),
+    result: "success",
+  });
+  sendJson(req, res, 200, {
     ok: true,
     item: {
       id: item.id,
@@ -730,7 +865,7 @@ async function handleInstanceUsageSummaryRequest(
       checkedAt: result.checkedAt,
       ...(result.error ? { error: result.error } : {}),
     },
-  });
+  }, config.corsAllowedOrigins);
 }
 
 
@@ -844,6 +979,116 @@ function isAdminRequest(config: SharedConsoleApiConfig, req: IncomingMessage): b
   );
 }
 
+function readRequestActor(config: SharedConsoleApiConfig, req: IncomingMessage): string {
+  return isAdminRequest(config, req) ? "admin" : "anonymous";
+}
+
+function readRequestId(req: IncomingMessage): string | undefined {
+  const raw = req.headers["x-request-id"];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed || undefined;
+}
+
+async function logAuditEvent(
+  event: {
+    actor: string;
+    action: string;
+    target?: string;
+    tenantId?: string | null;
+    pool?: InstancePool;
+    requestId?: string;
+    result: "success" | "error";
+    error?: string;
+  },
+  repositories?: {
+    auditEventsRepository: ReturnType<typeof createAuditEventsRepository> | null;
+  },
+): Promise<void> {
+  const payload = {
+    timestamp: new Date().toISOString(),
+    ...event,
+  };
+  process.stdout.write(`[audit] ${JSON.stringify(payload)}\n`);
+  if (repositories?.auditEventsRepository) {
+    try {
+      await repositories.auditEventsRepository.writeAuditEvent({
+        actor: event.actor,
+        action: event.action,
+        target: event.target ?? null,
+        tenantId: event.tenantId ?? null,
+        pool: event.pool ?? null,
+        requestId: event.requestId,
+        result: event.result,
+        error: event.error ?? null,
+      });
+    } catch (error) {
+      process.stdout.write(`[audit] ${JSON.stringify({
+        timestamp: new Date().toISOString(),
+        actor: "system",
+        action: "audit.persist",
+        result: "error",
+        error: error instanceof Error ? error.message : String(error),
+      })}\n`);
+    }
+  }
+}
+
+function trackRequestMetrics(route: string, statusCode: number, durationMs: number): void {
+  requestMetricsState.totalCount += 1;
+  if (statusCode >= 400) {
+    requestMetricsState.errorCount += 1;
+  }
+  requestMetricsState.byStatusCode.set(statusCode, (requestMetricsState.byStatusCode.get(statusCode) ?? 0) + 1);
+  const current = requestMetricsState.byRoute.get(route) ?? { count: 0, totalMs: 0, maxMs: 0 };
+  current.count += 1;
+  current.totalMs += durationMs;
+  current.maxMs = Math.max(current.maxMs, durationMs);
+  requestMetricsState.byRoute.set(route, current);
+}
+
+const requestRateLimitState = new Map<string, { count: number; resetAt: number }>();
+const instanceWriteLockState = new Map<string, Promise<void>>();
+const requestMetricsState = {
+  totalCount: 0,
+  errorCount: 0,
+  byStatusCode: new Map<number, number>(),
+  byRoute: new Map<string, { count: number; totalMs: number; maxMs: number }>(),
+};
+
+function enforceRateLimit(key: string, limit = 30, windowMs = 60_000): void {
+  const now = Date.now();
+  const current = requestRateLimitState.get(key);
+  if (!current || current.resetAt <= now) {
+    requestRateLimitState.set(key, { count: 1, resetAt: now + windowMs });
+    return;
+  }
+  if (current.count >= limit) {
+    throw new HttpError(429, "Too Many Requests", "rate_limited");
+  }
+  current.count += 1;
+  requestRateLimitState.set(key, current);
+}
+
+async function withInstanceWriteLock<T>(key: string, run: () => Promise<T>): Promise<T> {
+  while (instanceWriteLockState.has(key)) {
+    await instanceWriteLockState.get(key);
+  }
+  let release!: () => void;
+  const lock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  instanceWriteLockState.set(key, lock);
+  try {
+    return await run();
+  } finally {
+    release();
+    if (instanceWriteLockState.get(key) === lock) {
+      instanceWriteLockState.delete(key);
+    }
+  }
+}
+
 function copyProxyRequestHeaders(
   headers: IncomingMessage["headers"],
   targetHost: string,
@@ -883,6 +1128,10 @@ function copyProxyResponseHeaders(source: Headers, res: ServerResponse): void {
     }
     res.setHeader(key, value);
   }
+}
+
+function getRequestOrigin(req: IncomingMessage): string {
+  return typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
 }
 
 async function handleInstanceUiProxy(
@@ -943,8 +1192,14 @@ async function handleAdminValidate(
   if ((req.method ?? "GET").toUpperCase() !== "GET") {
     throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
   }
+  enforceRateLimit("admin.validate");
   requireAdminRequest(config, req);
-  sendJson(res, 200, { ok: true, admin: true });
+  await logAuditEvent({
+    actor: readRequestActor(config, req),
+    action: "admin.validate",
+    result: "success",
+  });
+  sendJson(req, res, 200, { ok: true, admin: true }, config.corsAllowedOrigins);
 }
 
 async function handleInstanceTokenRequest(
@@ -957,20 +1212,29 @@ async function handleInstanceTokenRequest(
   if ((req.method ?? "GET").toUpperCase() !== "GET") {
     throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
   }
+  enforceRateLimit(`instance.token.read:${route.pool}`);
+  enforceRateLimit(`instance.pairing:${route.pool}`);
   requireAdminRequest(config, req);
   const instance = await ensureInstance(config, deps, route.pool, route.id, false);
   const token = await readInstanceProxyToken(instance);
   if (!token) {
     throw new HttpError(404, `Instance ${instance.id} does not have a token.`, "not_found");
   }
-  sendJson(res, 200, {
+  await logAuditEvent({
+    actor: readRequestActor(config, req),
+    action: "instance.token.read",
+    target: instance.id,
+    pool: route.pool,
+    result: "success",
+  });
+  sendJson(req, res, 200, {
     ok: true,
     item: {
       id: instance.id,
       pool: route.pool,
       token,
     },
-  });
+  }, config.corsAllowedOrigins);
 }
 
 async function applyInstanceModelChannel(
@@ -1007,15 +1271,16 @@ async function handleModelChannelsRequest(
   deps: SharedConsoleApiDeps,
 ): Promise<void> {
   const method = (req.method ?? "GET").toUpperCase();
+  enforceRateLimit("model-channels.read");
   if (method === "GET") {
-  const settings = await readSharedConsoleModelChannelSettings(config.modelChannelsPath);
-  const admin = isAdminRequest(config, req);
-    sendJson(res, 200, {
+    const settings = await readSharedConsoleModelChannelSettings(config.modelChannelsPath);
+    const admin = isAdminRequest(config, req);
+    sendJson(req, res, 200, {
       ok: true,
       admin,
       catalog: buildSharedConsoleModelChannelCatalog(settings),
       ...(admin ? { settings } : {}),
-    });
+    }, config.corsAllowedOrigins);
     return;
   }
 
@@ -1023,6 +1288,7 @@ async function handleModelChannelsRequest(
     throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
   }
 
+  enforceRateLimit("model-channels.write");
   requireAdminRequest(config, req);
   const body = await readJsonBody(req);
   const autoUnassignRemovedChannels = readOptionalBooleanBody(
@@ -1030,7 +1296,9 @@ async function handleModelChannelsRequest(
     "autoUnassignRemovedChannels",
     false,
   );
+  const beforeSettings = await readSharedConsoleModelChannelSettings(config.modelChannelsPath);
   const nextSettings = normalizeSharedConsoleModelChannelSettings(body.settings ?? body);
+  const settingsDiff = diffSharedConsoleModelChannelSettings(beforeSettings, nextSettings);
   const instances = await listAllCurrentInstances(config, deps);
   const inUseIds = [...new Set(instances.map((item) => item.modelChannelId).filter(Boolean))];
   const missingIds = inUseIds.filter(
@@ -1097,18 +1365,108 @@ async function handleModelChannelsRequest(
         .map((item) => item.id),
     ),
   ];
+  const changeSummary = {
+    ...settingsDiff,
+    affectedInstanceIds: affectedInstances.map((item) => item.id),
+    unassignedInstanceIds: unassignedInstances.map((item) => item.id),
+    restartRequired,
+  };
 
-  sendJson(res, 200, {
+  await logAuditEvent({
+    actor: readRequestActor(config, req),
+    action: "model-channels.update",
+    target: "model-channels",
+    requestId: readRequestId(req),
+    result: "success",
+  });
+
+  sendJson(req, res, 200, {
     ok: true,
     admin: true,
     catalog: buildSharedConsoleModelChannelCatalog(nextSettings),
     settings: nextSettings,
     meta: {
+      changeSummary,
       affectedInstances,
       unassignedInstances,
       restartRequired,
     },
-  });
+  }, config.corsAllowedOrigins);
+}
+
+async function handleTenantRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  config: SharedConsoleApiConfig,
+  deps: SharedConsoleApiDeps,
+  repositories: {
+    tenantsRepository: ReturnType<typeof createTenantsRepository> | null;
+    instanceTenantsRepository: ReturnType<typeof createInstanceTenantsRepository> | null;
+  },
+): Promise<void> {
+  const method = (req.method ?? "GET").toUpperCase();
+  if (method === "GET") {
+    const tenants = repositories.tenantsRepository ? await repositories.tenantsRepository.listTenants() : [];
+    const instanceTenants = repositories.instanceTenantsRepository
+      ? await repositories.instanceTenantsRepository.listInstanceTenants()
+      : [];
+    if (tenants.length > 0 || instanceTenants.length > 0) {
+      const instances = Object.fromEntries(instanceTenants.map((item) => [item.instanceId, item.tenantId]));
+      const defaultTenantId = tenants.find((item) => item.id === DEFAULT_SHARED_CONSOLE_TENANT_ID)?.id ?? DEFAULT_SHARED_CONSOLE_TENANT_ID;
+      sendJson(req, res, 200, {
+        ok: true,
+        source: "database",
+        defaultTenantId,
+        instances,
+        tenants,
+        instanceTenants,
+      }, config.corsAllowedOrigins);
+      return;
+    }
+
+    const mapping = await readSharedConsoleTenantMapping(config.tenantMappingPath);
+    sendJson(req, res, 200, {
+      ok: true,
+      source: "file",
+      defaultTenantId: mapping.defaultTenantId,
+      instances: mapping.instances,
+      tenants,
+      instanceTenants,
+    }, config.corsAllowedOrigins);
+    return;
+  }
+
+  if (method !== "PUT") {
+    throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
+  }
+
+  requireAdminRequest(config, req);
+  const body = await readJsonBody(req);
+  const nextMapping = normalizeTenantMapping(body);
+  if (repositories.tenantsRepository && repositories.instanceTenantsRepository) {
+    await repositories.tenantsRepository.upsertTenant({
+      id: nextMapping.defaultTenantId,
+      name: nextMapping.defaultTenantId,
+      description: null,
+      status: "active",
+    });
+    for (const [instanceId, tenantId] of Object.entries(nextMapping.instances)) {
+      await repositories.tenantsRepository.upsertTenant({
+        id: tenantId,
+        name: tenantId,
+        description: null,
+        status: "active",
+      });
+      await repositories.instanceTenantsRepository.setInstanceTenant(instanceId, tenantId, "api");
+    }
+  }
+  await fs.writeFile(config.tenantMappingPath, `${JSON.stringify(nextMapping, null, 2)}\n`, "utf8");
+  sendJson(req, res, 200, {
+    ok: true,
+    source: "database",
+    defaultTenantId: nextMapping.defaultTenantId,
+    instances: nextMapping.instances,
+  }, config.corsAllowedOrigins);
 }
 
 async function handleModelChannelsGenerateRequest(
@@ -1125,13 +1483,13 @@ async function handleModelChannelsGenerateRequest(
   const currentSettings =
     body.settings ?? (await readSharedConsoleModelChannelSettings(config.modelChannelsPath));
   const generated = generateSharedConsoleModelChannelSettingsDraft(currentSettings, body.generator ?? body);
-  sendJson(res, 200, {
+  sendJson(req, res, 200, {
     ok: true,
     admin: true,
     catalog: buildSharedConsoleModelChannelCatalog(generated.settings),
     settings: generated.settings,
     meta: generated.meta,
-  });
+  }, config.corsAllowedOrigins);
 }
 
 function parseJsonCommandStdout(
@@ -1184,14 +1542,21 @@ async function handleInstancePairingRequest(
       throw new HttpError(405, "Method Not Allowed", "method_not_allowed");
     }
     const pairing = await runInstancePairingCommand(config, deps, route, "list");
-    sendJson(res, 200, {
+    await logAuditEvent({
+      actor: readRequestActor(config, req),
+      action: "instance.pairing.list",
+      target: instance.id,
+      pool: route.pool,
+      result: "success",
+    });
+    sendJson(req, res, 200, {
       ok: true,
       item: {
         id: instance.id,
         pool: route.pool,
         pairing: pairing.json,
       },
-    });
+    }, config.corsAllowedOrigins);
     return;
   }
 
@@ -1201,7 +1566,14 @@ async function handleInstancePairingRequest(
 
   const approval = await runInstancePairingCommand(config, deps, route, "approve-latest");
   const pairing = await runInstancePairingCommand(config, deps, route, "list");
-  sendJson(res, 200, {
+  await logAuditEvent({
+    actor: readRequestActor(config, req),
+    action: "instance.pairing.approve-latest",
+    target: instance.id,
+    pool: route.pool,
+    result: "success",
+  });
+  sendJson(req, res, 200, {
     ok: true,
     action: "approve-latest",
     item: {
@@ -1210,7 +1582,7 @@ async function handleInstancePairingRequest(
       pairing: pairing.json,
     },
     result: approval.json,
-  });
+  }, config.corsAllowedOrigins);
 }
 
 function writeUpgradeFailure(socket: Socket, statusCode: number, message: string): void {
@@ -1287,58 +1659,60 @@ async function handleCreateInstance(
   const body = await readJsonBody(req);
   const pool = readInstancePool(body, fallbackPool);
   const id = ensureInstanceId(readOptionalString(body, "id") ?? "");
-  const name = readOptionalString(body, "name");
-  const port = readOptionalPort(body);
-  const runtimeKind = readRuntimeKind(body);
-  const containerName = readOptionalString(body, "containerName");
-  const containerId = readOptionalString(body, "containerId");
-  if (runtimeKind === "container" && !containerName && !containerId) {
-    throw new HttpError(400, 'Container-managed instances require "containerName" or "containerId".');
-  }
-  const profile =
-    readOptionalString(body, "profile") ?? `${pool === "dedicated" ? "dedicated" : "shared"}-${id}`;
-  const template = readOptionalString(body, "template");
-  const bind = readOptionalString(body, "bind");
-  const modelChannelId = readOptionalString(body, "modelChannelId");
+  await withInstanceWriteLock(`instance:${pool}:${id}`, async () => {
+    const name = readOptionalString(body, "name");
+    const port = readOptionalPort(body);
+    const runtimeKind = readRuntimeKind(body);
+    const containerName = readOptionalString(body, "containerName");
+    const containerId = readOptionalString(body, "containerId");
+    if (runtimeKind === "container" && !containerName && !containerId) {
+      throw new HttpError(400, 'Container-managed instances require "containerName" or "containerId".');
+    }
+    const profile =
+      readOptionalString(body, "profile") ?? `${pool === "dedicated" ? "dedicated" : "shared"}-${id}`;
+    const template = readOptionalString(body, "template");
+    const bind = readOptionalString(body, "bind");
+    const modelChannelId = readOptionalString(body, "modelChannelId");
 
-  const args = [id, "--root", resolveInstancesRoot(config, pool)];
-  if (typeof port === "number") {
-    args.push("--port", String(port));
-  }
-  if (profile) {
-    args.push("--profile", profile);
-  }
-  if (template) {
-    args.push("--template", template);
-  }
-  if (bind) {
-    args.push("--bind", bind);
-  }
-  if (name) {
-    args.push("--name", name);
-  }
-  args.push("--runtime-kind", runtimeKind);
-  if (containerName) {
-    args.push("--container-name", containerName);
-  }
-  if (containerId) {
-    args.push("--container-id", containerId);
-  }
+    const args = [id, "--root", resolveInstancesRoot(config, pool)];
+    if (typeof port === "number") {
+      args.push("--port", String(port));
+    }
+    if (profile) {
+      args.push("--profile", profile);
+    }
+    if (template) {
+      args.push("--template", template);
+    }
+    if (bind) {
+      args.push("--bind", bind);
+    }
+    if (name) {
+      args.push("--name", name);
+    }
+    args.push("--runtime-kind", runtimeKind);
+    if (containerName) {
+      args.push("--container-name", containerName);
+    }
+    if (containerId) {
+      args.push("--container-id", containerId);
+    }
 
-  const result = await runOpsCommand(config, deps, {
-    scriptName: "create-instance.sh",
-    args,
-  });
-  const instance = await applyInstanceModelChannel(config, deps, pool, id, modelChannelId);
-  sendJson(res, 201, {
-    ok: true,
-    pool,
-    item: instance,
-    command: {
+    const result = await runOpsCommand(config, deps, {
       scriptName: "create-instance.sh",
-      stdout: result.stdout.trim(),
-      stderr: result.stderr.trim(),
-    },
+      args,
+    });
+    const instance = await applyInstanceModelChannel(config, deps, pool, id, modelChannelId);
+    sendJson(req, res, 201, {
+      ok: true,
+      pool,
+      item: instance,
+      command: {
+        scriptName: "create-instance.sh",
+        stdout: result.stdout.trim(),
+        stderr: result.stderr.trim(),
+      },
+    }, config.corsAllowedOrigins);
   });
 }
 
@@ -1351,49 +1725,52 @@ async function handlePatchInstance(
   id: string,
 ): Promise<void> {
   await ensureInstance(config, deps, pool, id, false);
-  const body = await readJsonBody(req);
-  const allowedKeys = new Set(["name", "modelChannelId"]);
-  const unsupportedKeys = Object.keys(body).filter((key) => !allowedKeys.has(key));
-  if (unsupportedKeys.length > 0) {
-    throw new HttpError(
-      400,
-      `PATCH currently supports only: name, modelChannelId. Unsupported keys: ${unsupportedKeys.join(", ")}`,
-    );
-  }
-  let didChange = false;
-  const name = readOptionalString(body, "name");
-  if ("name" in body) {
-    if (!name) {
-      throw new HttpError(400, 'PATCH requires a non-empty "name" when "name" is provided.');
+  await withInstanceWriteLock(`instance:${pool}:${id}`, async () => {
+    const body = await readJsonBody(req);
+    const allowedKeys = new Set(["name", "modelChannelId"]);
+    const unsupportedKeys = Object.keys(body).filter((key) => !allowedKeys.has(key));
+    if (unsupportedKeys.length > 0) {
+      throw new HttpError(
+        400,
+        `PATCH currently supports only: name, modelChannelId. Unsupported keys: ${unsupportedKeys.join(", ")}`,
+      );
     }
-    await updateSharedInstanceName(resolveInstancesRoot(config, pool), id, name);
-    didChange = true;
-  }
-  if ("modelChannelId" in body) {
-    const rawChannelId = body.modelChannelId;
-    if (rawChannelId != null && typeof rawChannelId !== "string") {
-      throw new HttpError(400, '"modelChannelId" must be a string or null.');
+    let didChange = false;
+    const name = readOptionalString(body, "name");
+    if ("name" in body) {
+      if (!name) {
+        throw new HttpError(400, 'PATCH requires a non-empty "name" when "name" is provided.');
+      }
+      await updateSharedInstanceName(resolveInstancesRoot(config, pool), id, name);
+      didChange = true;
     }
-    await applyInstanceModelChannel(
-      config,
-      deps,
-      pool,
-      id,
-      typeof rawChannelId === "string" ? rawChannelId.trim() || null : null,
-    );
-    didChange = true;
-  }
-  if (!didChange) {
-    throw new HttpError(400, "PATCH requires at least one supported field.");
-  }
-  const instance = await ensureInstance(config, deps, pool, id, false);
-  sendJson(res, 200, {
-    ok: true,
-    item: instance,
+    if ("modelChannelId" in body) {
+      const rawChannelId = body.modelChannelId;
+      if (rawChannelId != null && typeof rawChannelId !== "string") {
+        throw new HttpError(400, '"modelChannelId" must be a string or null.');
+      }
+      await applyInstanceModelChannel(
+        config,
+        deps,
+        pool,
+        id,
+        typeof rawChannelId === "string" ? rawChannelId.trim() || null : null,
+      );
+      didChange = true;
+    }
+    if (!didChange) {
+      throw new HttpError(400, "PATCH requires at least one supported field.");
+    }
+    const instance = await ensureInstance(config, deps, pool, id, false);
+    sendJson(req, res, 200, {
+      ok: true,
+      item: instance,
+    }, config.corsAllowedOrigins);
   });
 }
 
 async function handleAction(
+  req: IncomingMessage,
   res: ServerResponse,
   config: SharedConsoleApiConfig,
   deps: SharedConsoleApiDeps,
@@ -1402,20 +1779,22 @@ async function handleAction(
   action: "start" | "stop" | "restart",
 ): Promise<void> {
   await ensureInstance(config, deps, pool, id, false);
-  const result = await runOpsCommand(config, deps, {
-    scriptName: `${action}-instance.sh`,
-    args: [id, "--root", resolveInstancesRoot(config, pool)],
-  });
-  const instance = await ensureInstance(config, deps, pool, id, action !== "stop");
-  sendJson(res, 200, {
-    ok: true,
-    action,
-    item: instance,
-    command: {
+  await withInstanceWriteLock(`instance:${pool}:${id}`, async () => {
+    const result = await runOpsCommand(config, deps, {
       scriptName: `${action}-instance.sh`,
-      stdout: result.stdout.trim(),
-      stderr: result.stderr.trim(),
-    },
+      args: [id, "--root", resolveInstancesRoot(config, pool)],
+    });
+    const instance = await ensureInstance(config, deps, pool, id, action !== "stop");
+    sendJson(req, res, 200, {
+      ok: true,
+      action,
+      item: instance,
+      command: {
+        scriptName: `${action}-instance.sh`,
+        stdout: result.stdout.trim(),
+        stderr: result.stderr.trim(),
+      },
+    }, config.corsAllowedOrigins);
   });
 }
 
@@ -1472,7 +1851,7 @@ async function handleContainerAction(
       }
     },
   });
-  sendJson(res, 200, {
+  sendJson(req, res, 200, {
     ok: true,
     action,
     item: result.container,
@@ -1483,7 +1862,7 @@ async function handleContainerAction(
       exitCode: result.command.exitCode,
     },
     restartedInstances: result.restartedInstances,
-  });
+  }, config.corsAllowedOrigins);
 }
 
 async function handleContainerLogs(
@@ -1508,14 +1887,14 @@ async function handleContainerLogs(
     runDockerCommand: deps.runDockerCommand,
     tail: readTailQuery(url),
   });
-  sendJson(res, 200, {
+  sendJson(req, res, 200, {
     ok: true,
     item: result.container,
     logs: {
       tail: result.tail,
       text: result.text,
     },
-  });
+  }, config.corsAllowedOrigins);
 }
 
 async function handleCreateContainers(
@@ -1536,58 +1915,60 @@ async function handleCreateContainers(
   const containerDedicatedRoot =
     env.OPENCLAW_CONTAINER_DEDICATED_INSTANCES_ROOT?.trim() || config.dedicatedInstancesRoot;
 
-  const args = [
-    ...names.flatMap((name) => ["--name", name]),
-    "--image",
-    image,
-    "--repo-root-host",
-    config.repoRoot,
-    "--shared-instances-root-host",
-    config.sharedInstancesRoot,
-    "--dedicated-instances-root-host",
-    config.dedicatedInstancesRoot,
-    "--repo-root-container",
-    containerRepoRoot,
-    "--shared-instances-root-container",
-    containerSharedRoot,
-    "--dedicated-instances-root-container",
-    containerDedicatedRoot,
-  ];
-  if (command) {
-    args.push("--command", command);
-  }
-  if (pullMissing) {
-    args.push("--pull-missing");
-  }
-
-  const result = await runOpsCommand(config, deps, {
-    scriptName: "create-container.sh",
-    args,
-  });
-
-  const instances = await listAllCurrentInstances(config, deps);
-  const snapshot = await listSharedConsoleContainers(instances, {
-    listDockerContainers: deps.listDockerContainers,
-    includeAllDockerContainers: false,
-  });
-  const items = names
-    .map((name) => snapshot.items.find((item) => item.name === name))
-    .filter((value): value is NonNullable<typeof value> => Boolean(value));
-
-  sendJson(res, 201, {
-    ok: true,
-    items,
-    request: {
-      names,
+  await withInstanceWriteLock(`containers:${names.join(",")}`, async () => {
+    const args = [
+      ...names.flatMap((name) => ["--name", name]),
+      "--image",
       image,
-      command: command ?? null,
-      pullMissing,
-    },
-    command: {
+      "--repo-root-host",
+      config.repoRoot,
+      "--shared-instances-root-host",
+      config.sharedInstancesRoot,
+      "--dedicated-instances-root-host",
+      config.dedicatedInstancesRoot,
+      "--repo-root-container",
+      containerRepoRoot,
+      "--shared-instances-root-container",
+      containerSharedRoot,
+      "--dedicated-instances-root-container",
+      containerDedicatedRoot,
+    ];
+    if (command) {
+      args.push("--command", command);
+    }
+    if (pullMissing) {
+      args.push("--pull-missing");
+    }
+
+    const result = await runOpsCommand(config, deps, {
       scriptName: "create-container.sh",
-      stdout: result.stdout.trim(),
-      stderr: result.stderr.trim(),
-    },
+      args,
+    });
+
+    const instances = await listAllCurrentInstances(config, deps);
+    const snapshot = await listSharedConsoleContainers(instances, {
+      listDockerContainers: deps.listDockerContainers,
+      includeAllDockerContainers: false,
+    });
+    const items = names
+      .map((name) => snapshot.items.find((item) => item.name === name))
+      .filter((value): value is NonNullable<typeof value> => Boolean(value));
+
+    sendJson(req, res, 201, {
+      ok: true,
+      items,
+      request: {
+        names,
+        image,
+        command: command ?? null,
+        pullMissing,
+      },
+      command: {
+        scriptName: "create-container.sh",
+        stdout: result.stdout.trim(),
+        stderr: result.stderr.trim(),
+      },
+    }, config.corsAllowedOrigins);
   });
 }
 
@@ -1596,21 +1977,47 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
     ...resolveSharedConsoleApiConfig(deps.env),
     ...deps.config,
   };
+  const db = config.databaseUrl ? createDbClient({ databaseUrl: config.databaseUrl }) : null;
+  const tenantsRepository = db ? createTenantsRepository({ db }) : null;
+  const instanceTenantsRepository = db ? createInstanceTenantsRepository({ db }) : null;
+  const auditEventsRepository = db ? createAuditEventsRepository({ db }) : null;
   const proxyWebSocketServer = new WebSocketServer({ noServer: true });
 
   const server = createServer((req, res) => {
+    const startedAt = Date.now();
+    const routeLabel = `${(req.method ?? "GET").toUpperCase()} ${new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`).pathname}`;
     void (async () => {
       try {
         setCorsHeaders(res);
         if ((req.method ?? "GET").toUpperCase() === "OPTIONS") {
           res.statusCode = 204;
           res.end();
+          trackRequestMetrics(routeLabel, 204, Date.now() - startedAt);
           return;
         }
 
         const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
         if (url.pathname === "/healthz") {
-          sendJson(res, 200, { ok: true, status: "live" });
+          sendJson(req, res, 200, { ok: true, status: "live" }, config.corsAllowedOrigins);
+          trackRequestMetrics(routeLabel, 200, Date.now() - startedAt);
+          return;
+        }
+        if (url.pathname === "/metrics") {
+          const metricsPayload = {
+            ok: true,
+            totalCount: requestMetricsState.totalCount,
+            errorCount: requestMetricsState.errorCount,
+            byStatusCode: Object.fromEntries(requestMetricsState.byStatusCode.entries()),
+            byRoute: Object.fromEntries(
+              [...requestMetricsState.byRoute.entries()].map(([key, value]) => [key, {
+                count: value.count,
+                averageMs: value.count > 0 ? Math.round(value.totalMs / value.count) : 0,
+                maxMs: value.maxMs,
+              }]),
+            ),
+          };
+          sendJson(req, res, 200, metricsPayload, config.corsAllowedOrigins);
+          trackRequestMetrics(routeLabel, 200, Date.now() - startedAt);
           return;
         }
 
@@ -1621,6 +2028,14 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
 
         if (url.pathname === "/api/model-channels/generate") {
           await handleModelChannelsGenerateRequest(req, res, config);
+          return;
+        }
+
+        if (url.pathname === "/api/tenants") {
+          await handleTenantRequest(req, res, config, deps, {
+            tenantsRepository,
+            instanceTenantsRepository,
+          });
           return;
         }
 
@@ -1673,7 +2088,7 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
               return;
             }
             if (req.method !== "GET") {
-              sendError(res, 405, "Method Not Allowed", "method_not_allowed");
+              sendError(req, res, 405, "Method Not Allowed", "method_not_allowed");
               return;
             }
             const instances = await listAllCurrentInstances(config, deps);
@@ -1681,17 +2096,17 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
               listDockerContainers: deps.listDockerContainers,
               includeAllDockerContainers: readBooleanQuery(url, "all", false),
             });
-            sendJson(res, 200, {
+            sendJson(req, res, 200, {
               ok: true,
               items: snapshot.items,
               meta: snapshot.meta,
-            });
+            }, config.corsAllowedOrigins);
             return;
           }
 
           if (containerRoute.kind === "logs") {
             if (req.method !== "GET") {
-              sendError(res, 405, "Method Not Allowed", "method_not_allowed");
+              sendError(req, res, 405, "Method Not Allowed", "method_not_allowed", config.corsAllowedOrigins);
               return;
             }
             await handleContainerLogs(res, url, config, deps, containerRoute.id);
@@ -1699,7 +2114,7 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
           }
 
           if (req.method !== "POST") {
-            sendError(res, 405, "Method Not Allowed", "method_not_allowed");
+            sendError(req, res, 405, "Method Not Allowed", "method_not_allowed", config.corsAllowedOrigins);
             return;
           }
           await handleContainerAction(res, config, deps, containerRoute.id, containerRoute.action);
@@ -1708,7 +2123,7 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
 
         const route = parseInstanceRoute(url);
         if (!route) {
-          sendError(res, 404, "Not Found", "not_found");
+          sendError(req, res, 404, "Not Found", "not_found", config.corsAllowedOrigins);
           return;
         }
 
@@ -1719,7 +2134,7 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
               resolveInstancesRoot(config, route.pool),
               resolveRecordOptions(config, deps, includeProbe),
             );
-            sendJson(res, 200, {
+            sendJson(req, res, 200, {
               ok: true,
               items,
               meta: {
@@ -1727,14 +2142,14 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
                 instancesRoot: resolveInstancesRoot(config, route.pool),
                 includeProbe,
               },
-            });
+            }, config.corsAllowedOrigins);
             return;
           }
           if (req.method === "POST") {
             await handleCreateInstance(req, res, config, deps, route.pool);
             return;
           }
-          sendError(res, 405, "Method Not Allowed", "method_not_allowed");
+          sendError(req, res, 405, "Method Not Allowed", "method_not_allowed", config.corsAllowedOrigins);
           return;
         }
 
@@ -1742,32 +2157,32 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
           if (req.method === "GET") {
             const includeProbe = readBooleanQuery(url, "includeProbe", false);
             const item = await ensureInstance(config, deps, route.pool, route.id, includeProbe);
-            sendJson(res, 200, {
+            sendJson(req, res, 200, {
               ok: true,
               item,
-            });
+            }, config.corsAllowedOrigins);
             return;
           }
           if (req.method === "PATCH") {
             await handlePatchInstance(req, res, config, deps, route.pool, route.id);
             return;
           }
-          sendError(res, 405, "Method Not Allowed", "method_not_allowed");
+          sendError(req, res, 405, "Method Not Allowed", "method_not_allowed", config.corsAllowedOrigins);
           return;
         }
 
         if (req.method !== "POST") {
-          sendError(res, 405, "Method Not Allowed", "method_not_allowed");
+          sendError(req, res, 405, "Method Not Allowed", "method_not_allowed", config.corsAllowedOrigins);
           return;
         }
-        await handleAction(res, config, deps, route.pool, route.id, route.action);
+        await handleAction(req, res, config, deps, route.pool, route.id, route.action);
       } catch (error) {
         if (error instanceof HttpError) {
-          sendError(res, error.statusCode, error.message, error.errorType);
+          sendError(req, res, error.statusCode, error.message, error.errorType, config.corsAllowedOrigins);
           return;
         }
         if (error instanceof OpsCommandError) {
-          sendJson(res, 502, {
+          sendJson(req, res, 502, {
             ok: false,
             error: {
               type: "ops_command_failed",
@@ -1777,14 +2192,16 @@ export function createSharedConsoleApiServer(deps: SharedConsoleApiDeps = {}): S
               stderr: error.result.stderr.trim(),
               exitCode: error.result.exitCode,
             },
-          });
+          }, config.corsAllowedOrigins);
           return;
         }
         sendError(
+          req,
           res,
           500,
           error instanceof Error ? error.message : "Internal Server Error",
           "internal_error",
+          config.corsAllowedOrigins,
         );
       }
     })();

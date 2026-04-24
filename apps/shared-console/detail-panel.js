@@ -74,6 +74,7 @@ export function renderDetailSection(params) {
     elements.detailContent.classList.add("hidden");
     if (elements.openUiButton) {
       elements.openUiButton.disabled = true;
+      elements.openUiButton.title = "请先选择一个实例";
     }
     if (elements.copyTokenButton) {
       elements.copyTokenButton.classList.add("hidden");
@@ -81,6 +82,7 @@ export function renderDetailSection(params) {
     }
     if (elements.copyUiLinkButton) {
       elements.copyUiLinkButton.disabled = true;
+      elements.copyUiLinkButton.title = "请先选择一个实例";
     }
     if (elements.copyLoginGuideButton) {
       elements.copyLoginGuideButton.classList.add("hidden");

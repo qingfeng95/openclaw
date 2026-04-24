@@ -79,6 +79,14 @@ export type SharedConsoleModelChannelDraftGenerationResult = {
   };
 };
 
+export type SharedConsoleModelChannelSettingsChangeSummary = {
+  addedChannelIds: string[];
+  removedChannelIds: string[];
+  addedGroupIds: string[];
+  removedGroupIds: string[];
+  changedUserCanConfigureModels: boolean;
+};
+
 export type SharedConsoleModelChannelTarget =
   | {
       kind: "channel";
@@ -477,6 +485,32 @@ export async function readSharedConsoleModelChannelSettings(
     }
     throw error;
   }
+}
+
+export function diffSharedConsoleModelChannelSettings(
+  before: SharedConsoleModelChannelSettings,
+  after: SharedConsoleModelChannelSettings,
+): SharedConsoleModelChannelSettingsChangeSummary {
+  const beforeChannelIds = new Set(before.channels.map((channel) => channel.id));
+  const afterChannelIds = new Set(after.channels.map((channel) => channel.id));
+  const beforeGroupIds = new Set(before.channelGroups.map((group) => group.id));
+  const afterGroupIds = new Set(after.channelGroups.map((group) => group.id));
+
+  return {
+    addedChannelIds: after.channels
+      .filter((channel) => !beforeChannelIds.has(channel.id))
+      .map((channel) => channel.id),
+    removedChannelIds: before.channels
+      .filter((channel) => !afterChannelIds.has(channel.id))
+      .map((channel) => channel.id),
+    addedGroupIds: after.channelGroups
+      .filter((group) => !beforeGroupIds.has(group.id))
+      .map((group) => group.id),
+    removedGroupIds: before.channelGroups
+      .filter((group) => !afterGroupIds.has(group.id))
+      .map((group) => group.id),
+    changedUserCanConfigureModels: before.userCanConfigureModels !== after.userCanConfigureModels,
+  };
 }
 
 export async function writeSharedConsoleModelChannelSettings(

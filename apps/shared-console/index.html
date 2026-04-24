@@ -76,6 +76,7 @@
             <button class="tab-button" type="button" data-tab="containers">容器管理</button>
             <button class="tab-button" type="button" data-tab="instances">实例管理</button>
             <button class="tab-button" type="button" data-tab="channels">渠道管理</button>
+            <button class="tab-button" type="button" data-tab="tenants">租户管理</button>
             <button class="tab-button" type="button" data-tab="activity">操作日志</button>
           </div>
         </aside>
@@ -609,6 +610,26 @@
                   </details>
                 </div>
               </form>
+            </section>
+          </section>
+
+          <section class="tab-page tenants-page" data-tab-page="tenants">
+            <section class="panel page-hero">
+              <div class="page-title-block">
+                <p class="section-kicker">Tenants</p>
+                <h2>租户与归属</h2>
+                <p class="page-toolbar-note">先管理实例归属和默认 tenant，再逐步接入授权与配额策略。</p>
+              </div>
+            </section>
+
+            <section class="panel section-card">
+              <div class="panel-header">
+                <div>
+                  <p class="section-kicker">租户映射</p>
+                  <h2>实例归属与默认租户</h2>
+                </div>
+              </div>
+              <div id="tenants-panel" class="tenant-panel"></div>
             </section>
           </section>
 

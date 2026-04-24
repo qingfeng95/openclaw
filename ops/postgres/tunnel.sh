@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SSH_USER="${SSH_USER:-root}"
+SSH_HOST="${SSH_HOST:-223.254.144.141}"
+SSH_PORT="${SSH_PORT:-17238}"
+LOCAL_PORT="${LOCAL_PORT:-5433}"
+REMOTE_HOST="${REMOTE_HOST:-127.0.0.1}"
+REMOTE_PORT="${REMOTE_PORT:-5432}"
+
+exec ssh -N -L "${LOCAL_PORT}:${REMOTE_HOST}:${REMOTE_PORT}" -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}"

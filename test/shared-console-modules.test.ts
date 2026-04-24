@@ -961,6 +961,9 @@ describe("shared console panel helpers", () => {
     expect(elements.addModelChannelDraftChannelButton.disabled).toBe(false);
     expect(elements.importModelChannelsButton.disabled).toBe(false);
     expect(elements.modelChannelsExportTextarea.disabled).toBe(true);
+    expect(elements.userModelConfigCheckbox.disabled).toBe(false);
+    expect(elements.generateModelChannelsButton.disabled).toBe(false);
+    expect(elements.saveModelChannelsButton.disabled).toBe(false);
     expect(elements.modelChannelsPanel.textContent).toContain("已进入，可维护全局渠道");
     expect(elements.modelChannelsPanel.textContent).toContain("有未保存变更");
     expect(elements.modelChannelsPanel.textContent).toContain("卡片是唯一主编辑区");
@@ -1162,6 +1165,9 @@ describe("shared console panel helpers", () => {
     expect(elements.detailTitle.textContent).toBe("Shared One");
     expect(elements.detailModelChannelSelect.disabled).toBe(false);
     expect(elements.saveDetailModelChannelButton.disabled).toBe(false);
+    expect(elements.openUiButton.disabled).toBe(false);
+    expect(elements.copyUiLinkButton.disabled).toBe(false);
+    expect(elements.copyTokenButton.classList.contains("hidden")).toBe(false);
     expect(renderModelChannelSelect).toHaveBeenCalledWith(elements.detailModelChannelSelect, "alpha");
     expect(renderMetaGrid).toHaveBeenCalledWith(item);
     expect(renderPairingSummary).toHaveBeenCalledOnce();
@@ -1169,6 +1175,65 @@ describe("shared console panel helpers", () => {
     expect(renderUsageSummary).toHaveBeenCalledWith(item);
     expect(updateAdminModeUi).toHaveBeenCalledOnce();
   });
+
+  it("renders empty detail state with permission-aware button hints", () => {
+    const dom = createDom();
+    const elements = createDetailElements(dom.window.document);
+    const renderPairingSummary = vi.fn();
+    const updateAdminModeUi = vi.fn();
+
+    renderDetailSection({
+      state: {
+        selectedItem: null,
+        pairingInfo: null,
+        pairingLoading: false,
+      },
+      elements,
+      isAdminModeEnabled: () => false,
+      renderModelChannelSelect: vi.fn(),
+      canOpenInstanceUi: () => false,
+      renderMetaGrid: vi.fn(),
+      renderPairingSummary,
+      renderProbeGrid: vi.fn(),
+      renderUsageSummary: vi.fn(),
+      updateAdminModeUi,
+    });
+
+    expect(elements.detailEmpty.classList.contains("hidden")).toBe(false);
+    expect(elements.detailContent.classList.contains("hidden")).toBe(true);
+    expect(elements.openUiButton.disabled).toBe(true);
+    expect(elements.openUiButton.title).toContain("请先选择一个实例");
+    expect(elements.copyUiLinkButton.disabled).toBe(true);
+    expect(elements.copyUiLinkButton.title).toContain("请先选择一个实例");
+    expect(elements.saveDetailModelChannelButton.disabled).toBe(true);
+    expect(renderPairingSummary).toHaveBeenCalledOnce();
+    expect(updateAdminModeUi).toHaveBeenCalledOnce();
+  });
++
++  it("describes admin availability more clearly in the admin mode note", () => {
++    const dom = createDom();
++    const elements = createDetailElements(dom.window.document);
++    const updateAdminModeUi = vi.fn();
++
++    renderDetailSection({
++      state: {
++        selectedItem: { id: "shared-1", name: "Shared One" },
++        pairingInfo: { pending: [] },
++        pairingLoading: false,
++      },
++      elements,
++      isAdminModeEnabled: () => true,
++      renderModelChannelSelect: vi.fn(),
++      canOpenInstanceUi: () => true,
++      renderMetaGrid: vi.fn(),
++      renderPairingSummary: vi.fn(),
++      renderProbeGrid: vi.fn(),
++      renderUsageSummary: vi.fn(),
++      updateAdminModeUi,
++    });
++
++    expect(updateAdminModeUi).toHaveBeenCalledOnce();
++  });
 
   it("submits detail model channel selection", async () => {
     const dom = createDom();

@@ -190,38 +190,56 @@ export function renderDetailActionStateSection(params) {
   const { elements, state, item, canOpenInstanceUi, instanceRuntimeLocation, isAdminModeEnabled } = params;
   if (elements.refreshDiagnosticsButton) {
     elements.refreshDiagnosticsButton.disabled = !item || state.selectedDiagnosticsLoading;
+    elements.refreshDiagnosticsButton.title = item
+      ? "刷新当前实例的诊断信息"
+      : "请先选择一个实例";
   }
   if (elements.openUiButton) {
-    elements.openUiButton.disabled = !canOpenInstanceUi(item);
-    elements.openUiButton.title =
-      instanceRuntimeLocation(item) === "container"
+    const openable = canOpenInstanceUi(item);
+    elements.openUiButton.disabled = !openable;
+    elements.openUiButton.title = openable
+      ? instanceRuntimeLocation(item) === "container"
         ? "通过 Shared Console 代理打开该容器实例的 UI"
-        : "通过 Shared Console 打开该实例的 UI";
+        : "通过 Shared Console 打开该实例的 UI"
+      : "实例未运行，无法打开 UI";
   }
   if (elements.copyUiLinkButton) {
-    elements.copyUiLinkButton.disabled = !canOpenInstanceUi(item);
-    elements.copyUiLinkButton.title =
-      instanceRuntimeLocation(item) === "container"
+    const openable = canOpenInstanceUi(item);
+    elements.copyUiLinkButton.disabled = !openable;
+    elements.copyUiLinkButton.title = openable
+      ? instanceRuntimeLocation(item) === "container"
         ? "复制通过 Shared Console 代理访问该容器实例 UI 的链接"
-        : "复制通过 Shared Console 访问该实例 UI 的链接";
+        : "复制通过 Shared Console 访问该实例 UI 的链接"
+      : "实例未运行，无法复制 UI 链接";
   }
   if (elements.copyTokenButton) {
     elements.copyTokenButton.disabled = !isAdminModeEnabled();
     elements.copyTokenButton.classList.toggle("hidden", !isAdminModeEnabled());
+    elements.copyTokenButton.title = isAdminModeEnabled() ? "复制当前实例 token" : "需要管理员模式";
   }
   if (elements.refreshPairingButton) {
     elements.refreshPairingButton.disabled = !isAdminModeEnabled();
     elements.refreshPairingButton.classList.toggle("hidden", !isAdminModeEnabled());
+    elements.refreshPairingButton.title = isAdminModeEnabled() ? "刷新当前实例的 pairing 状态" : "需要管理员模式";
   }
   if (elements.approveLatestPairingButton) {
     const pending = Array.isArray(state.pairingInfo?.pending) ? state.pairingInfo.pending : [];
-    elements.approveLatestPairingButton.disabled =
-      !isAdminModeEnabled() || !canOpenInstanceUi(item) || state.pairingLoading || pending.length === 0;
+    const enabled = isAdminModeEnabled() && canOpenInstanceUi(item) && !state.pairingLoading && pending.length > 0;
+    elements.approveLatestPairingButton.disabled = !enabled;
     elements.approveLatestPairingButton.classList.toggle("hidden", !isAdminModeEnabled());
+    elements.approveLatestPairingButton.title = enabled
+      ? "审批最新的 pairing 请求"
+      : !isAdminModeEnabled()
+        ? "需要管理员模式"
+        : pending.length === 0
+          ? "当前没有待审批的 pairing 请求"
+          : "当前实例未运行或正在刷新 pairing 状态";
   }
   if (elements.copyLoginGuideButton) {
-    elements.copyLoginGuideButton.disabled = !isAdminModeEnabled() || !canOpenInstanceUi(item);
+    const enabled = isAdminModeEnabled() && canOpenInstanceUi(item);
+    elements.copyLoginGuideButton.disabled = !enabled;
     elements.copyLoginGuideButton.classList.toggle("hidden", !isAdminModeEnabled());
+    elements.copyLoginGuideButton.title = enabled ? "复制登录指引" : "需要管理员模式且实例需运行";
   }
 }
 

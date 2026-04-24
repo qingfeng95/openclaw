@@ -8,7 +8,7 @@
     "url": "https://github.com/openclaw/openclaw/issues"
   },
   "license": "MIT",
-  "author": "",
+  "author": "liyb",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/openclaw/openclaw.git"
@@ -797,6 +797,7 @@
     "osc-progress": "^0.3.0",
     "pdfjs-dist": "^5.5.207",
     "playwright-core": "1.58.2",
+    "postgres": "^3.4.9",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
     "sqlite-vec": "0.1.7",
@@ -819,17 +820,18 @@
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260322.1",
     "@vitest/coverage-v8": "^4.1.0",
+    "grammy": "^1.41.1",
     "jscpd": "4.0.8",
     "jsdom": "^29.0.1",
     "lit": "^3.3.2",
     "oxfmt": "0.41.0",
     "oxlint": "^1.56.0",
-    "oxlint-tsgolint": "^0.17.1",
+    "oxlint-tsgolint": "^0.21.1",
     "signal-utils": "0.21.1",
     "tsdown": "0.21.4",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.5"
   },
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",

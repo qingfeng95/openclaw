@@ -1406,11 +1406,14 @@ async function handleTenantRequest(
 ): Promise<void> {
   const method = (req.method ?? "GET").toUpperCase();
   if (method === "GET") {
-    const tenants = (repositories.tenantsRepository ? await repositories.tenantsRepository.listTenants() : []) ?? [];
-    const instanceTenants = (repositories.instanceTenantsRepository
+    const rawTenants = repositories.tenantsRepository ? await repositories.tenantsRepository.listTenants() : [];
+    const rawInstanceTenants = repositories.instanceTenantsRepository
       ? await repositories.instanceTenantsRepository.listInstanceTenants()
-      : []) ?? [];
-    if ((tenants?.length ?? 0) > 0 || (instanceTenants?.length ?? 0) > 0) {
+      : [];
+    const tenants = Array.isArray(rawTenants) ? rawTenants : [];
+    const instanceTenants = Array.isArray(rawInstanceTenants) ? rawInstanceTenants : [];
+
+    if (tenants.length > 0 || instanceTenants.length > 0) {
       const instances = Object.fromEntries(instanceTenants.map((item) => [item.instanceId, item.tenantId]));
       const defaultTenantId = tenants.find((item) => item.id === DEFAULT_SHARED_CONSOLE_TENANT_ID)?.id ?? DEFAULT_SHARED_CONSOLE_TENANT_ID;
       sendJson(req, res, 200, {
@@ -1425,11 +1428,14 @@ async function handleTenantRequest(
     }
 
     const mapping = await readSharedConsoleTenantMapping(config.tenantMappingPath);
+    const instances = mapping && typeof mapping.instances === "object" && !Array.isArray(mapping.instances)
+      ? mapping.instances
+      : {};
     sendJson(req, res, 200, {
       ok: true,
       source: "file",
       defaultTenantId: mapping.defaultTenantId,
-      instances: mapping.instances,
+      instances,
       tenants,
       instanceTenants,
     }, config.corsAllowedOrigins);
